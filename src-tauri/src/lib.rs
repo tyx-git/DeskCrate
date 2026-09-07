@@ -3,6 +3,7 @@
 pub mod commands;
 pub mod error;
 pub mod models;
+pub(crate) mod path;
 pub mod services;
 pub mod state;
 pub mod storage;
@@ -58,17 +59,13 @@ pub fn run() {
             // `is_init` 由前端在窗口准备好后调用；这里仅处理进程退出时
             // 的持久化，避免 setup 阶段和前端状态机重复初始化窗口。
             //
-            // `ExitRequested` 早于窗口销毁，优先在这里保存；保留 `Exit`
-            // 作为极端退出路径的重试机会。
-            static WINDOW_STATE_SAVED: std::sync::atomic::AtomicBool =
-                std::sync::atomic::AtomicBool::new(false);
-
-            let should_save = matches!(
+            // `ExitRequested` 早于窗口销毁，适合读取窗口状态；但该事件
+            // 可能被 `prevent_exit` 取消，因此不能用“已保存”标记跳过后续
+            // 事件。`Exit` 作为实际退出时的兜底，重复写入成本很小。
+            if !matches!(
                 event,
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit
-            ) && !WINDOW_STATE_SAVED.load(std::sync::atomic::Ordering::Acquire);
-
-            if !should_save {
+            ) {
                 return;
             }
 
@@ -84,8 +81,6 @@ pub fn run() {
 
             if let Err(error) = services::window::persist_window_state(state.inner(), &window) {
                 log::error!("退出时保存窗口状态失败: {error}");
-            } else {
-                WINDOW_STATE_SAVED.store(true, std::sync::atomic::Ordering::Release);
             }
         });
 }

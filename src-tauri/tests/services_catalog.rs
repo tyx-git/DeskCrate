@@ -397,6 +397,40 @@ fn invalid_app_source_and_wrong_node_kinds_are_rejected() {
 }
 
 #[test]
+fn missing_local_app_source_is_rejected_even_when_a_fallback_icon_exists() {
+    let directory = TestDir::new("missing-app-source");
+    let state = directory.state();
+    let category = catalog::add_category(
+        &state,
+        AddCategoryRequest {
+            name: "分类".to_owned(),
+        },
+    )
+    .unwrap();
+
+    let error = catalog::add_app(
+        &state,
+        AddAppRequest {
+            parent_id: category.id,
+            source_path: directory
+                .child("missing.txt")
+                .to_string_lossy()
+                .into_owned(),
+            name: None,
+        },
+    )
+    .expect_err("missing local source should be rejected");
+
+    assert_eq!(error.code, "source_not_found");
+    assert_eq!(
+        catalog::get_all_data(&state).unwrap().categories[0]
+            .groups
+            .len(),
+        0
+    );
+}
+
+#[test]
 fn persisted_data_can_be_loaded_by_a_new_store_instance() {
     let directory = TestDir::new("reopen");
     let state = directory.state();

@@ -1,11 +1,10 @@
 use std::{
     ffi::c_void,
-    os::windows::ffi::OsStrExt,
     path::{Path, PathBuf},
     ptr,
 };
 
-use image::RgbaImage;
+use image::{Rgba, RgbaImage};
 use windows::{
     core::PCWSTR,
     Win32::{
@@ -13,9 +12,15 @@ use windows::{
             CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, SelectObject, BITMAPINFO,
             BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBITMAP, HBRUSH, HDC, HGDIOBJ,
         },
-        Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES,
+        Storage::FileSystem::{
+            FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_FLAGS_AND_ATTRIBUTES,
+        },
         UI::{
-            Shell::{ExtractIconExW, SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON},
+            Shell::{
+                ExtractIconExW, SHGetFileInfoW, SHGetStockIconInfo, SHFILEINFOW, SHGFI_FLAGS,
+                SHGFI_ICON, SHGFI_LARGEICON, SHGFI_USEFILEATTRIBUTES, SHGSI_ICON, SHGSI_LARGEICON,
+                SHSTOCKICONINFO, SIID_DOCNOASSOC, SIID_FOLDER,
+            },
             WindowsAndMessaging::{DestroyIcon, DrawIconEx, DI_NORMAL, HICON},
         },
     },
@@ -24,6 +29,7 @@ use windows::{
 use crate::{
     error::AppResult,
     models::{AppError, IconExtractionResult},
+    system::wide,
 };
 
 // 写入图标缓存的统一尺寸。
@@ -55,10 +61,7 @@ impl IconExtractor {
         icon_index: i32,
         app_id: &str,
     ) -> AppResult<IconExtractionResult> {
-        validate_app_id(app_id)?;
-
-        let icon = extract_icon_from_file(source_path, icon_index)?;
-        self.save_icon(app_id, icon)
+        self.extract_and_save(app_id, || extract_icon_from_file(source_path, icon_index))
     }
 
     // 使用 Windows Shell 的文件关联图标提取策略。
@@ -71,7 +74,33 @@ impl IconExtractor {
     ) -> AppResult<IconExtractionResult> {
         validate_app_id(app_id)?;
 
-        let icon = extract_associated_icon(source_path)?;
+        match extract_associated_icon(source_path) {
+            Ok(icon) => self.save_icon(app_id, icon),
+            Err(error) => {
+                // 路径可能在 service 的初始 metadata 检查后被删除；
+                // 此时不能把竞态造成的失败误判为“无文件关联”。
+                if !source_path.exists() {
+                    return Err(error);
+                }
+
+                // 无文件关联或无桌面 Shell 时仍允许保存节点，使用内置
+                // 占位图标保证前端得到稳定的 PNG 资源。
+                log::debug!(
+                    "无法获取 {} 的 Shell 图标，使用占位图标: {}",
+                    source_path.display(),
+                    error
+                );
+                self.save_placeholder_icon(app_id, source_path.is_dir())
+            }
+        }
+    }
+
+    fn extract_and_save<F>(&self, app_id: &str, extract: F) -> AppResult<IconExtractionResult>
+    where
+        F: FnOnce() -> AppResult<OwnedIcon>,
+    {
+        validate_app_id(app_id)?;
+        let icon = extract()?;
         self.save_icon(app_id, icon)
     }
 
@@ -81,6 +110,18 @@ impl IconExtractor {
         let image = RgbaImage::from_raw(width, height, pixels)
             .ok_or_else(|| AppError::new("icon_image_invalid", "图标像素数据无法构造图像"))?;
 
+        self.save_image(app_id, image)
+    }
+
+    fn save_placeholder_icon(
+        &self,
+        app_id: &str,
+        is_directory: bool,
+    ) -> AppResult<IconExtractionResult> {
+        self.save_image(app_id, placeholder_image(is_directory))
+    }
+
+    fn save_image(&self, app_id: &str, image: RgbaImage) -> AppResult<IconExtractionResult> {
         std::fs::create_dir_all(&self.icons_dir)?;
 
         let file_name = format!("{app_id}.png");
@@ -98,7 +139,7 @@ impl IconExtractor {
 
 // 从文件的图标资源中提取一个 `HICON`。
 fn extract_icon_from_file(source_path: &Path, icon_index: i32) -> AppResult<OwnedIcon> {
-    let wide_path = to_wide(source_path);
+    let wide_path = to_wide(source_path)?;
     let mut large_icon = HICON::default();
     let mut small_icon = HICON::default();
 
@@ -128,30 +169,119 @@ fn extract_icon_from_file(source_path: &Path, icon_index: i32) -> AppResult<Owne
 
 // 获取 Windows Shell 为指定路径选择的关联图标。
 fn extract_associated_icon(source_path: &Path) -> AppResult<OwnedIcon> {
-    let wide_path = to_wide(source_path);
-    let mut file_info = SHFILEINFOW::default();
+    let wide_path = to_wide(source_path)?;
+    let flags = SHGFI_ICON | SHGFI_LARGEICON;
 
+    // 先请求真实路径，以保留文件自身或目录的自定义图标。
+    if let Some(icon) = query_shell_icon(&wide_path, FILE_FLAGS_AND_ATTRIBUTES(0), flags) {
+        return Ok(icon);
+    }
+
+    // 临时文件、尚未注册关联的扩展名或无 UI Shell 环境可能无法通过
+    // 真实路径返回图标；使用文件属性请求系统默认图标作为稳定回退。
+    let attributes = if source_path.is_dir() {
+        FILE_ATTRIBUTE_DIRECTORY
+    } else {
+        FILE_ATTRIBUTE_NORMAL
+    };
+    if let Some(icon) = query_shell_icon(&wide_path, attributes, flags | SHGFI_USEFILEATTRIBUTES) {
+        return Ok(icon);
+    }
+
+    // 没有扩展名关联时使用 Windows 的通用 stock icon，保证普通文件
+    // 仍然能够被保存为可用的缓存资源。
+    extract_stock_icon(source_path.is_dir()).map_err(|error| {
+        AppError::new(
+            "associated_icon_failed",
+            format!("无法获取路径关联图标: {} ({error})", source_path.display()),
+        )
+    })
+}
+
+fn query_shell_icon(
+    wide_path: &[u16],
+    attributes: FILE_FLAGS_AND_ATTRIBUTES,
+    flags: SHGFI_FLAGS,
+) -> Option<OwnedIcon> {
+    let mut file_info = SHFILEINFOW::default();
     let result = unsafe {
         SHGetFileInfoW(
             PCWSTR(wide_path.as_ptr()),
-            FILE_FLAGS_AND_ATTRIBUTES(0),
+            attributes,
             Some(&mut file_info as *mut SHFILEINFOW),
             std::mem::size_of::<SHFILEINFOW>() as u32,
-            SHGFI_ICON | SHGFI_LARGEICON,
+            flags,
         )
     };
 
     if result == 0 || file_info.hIcon.is_invalid() {
         destroy_icon_if_valid(file_info.hIcon);
+        return None;
+    }
+
+    Some(OwnedIcon {
+        handle: file_info.hIcon,
+    })
+}
+
+fn extract_stock_icon(is_directory: bool) -> AppResult<OwnedIcon> {
+    let icon_id = if is_directory {
+        SIID_FOLDER
+    } else {
+        SIID_DOCNOASSOC
+    };
+    let mut stock_info = SHSTOCKICONINFO {
+        cbSize: std::mem::size_of::<SHSTOCKICONINFO>() as u32,
+        ..SHSTOCKICONINFO::default()
+    };
+
+    let result =
+        unsafe { SHGetStockIconInfo(icon_id, SHGSI_ICON | SHGSI_LARGEICON, &mut stock_info) };
+    if let Err(error) = result {
+        destroy_icon_if_valid(stock_info.hIcon);
+        return Err(windows_error("stock_icon_failed", error));
+    }
+
+    if stock_info.hIcon.is_invalid() {
         return Err(AppError::new(
-            "associated_icon_failed",
-            format!("无法获取路径关联图标: {}", source_path.display()),
+            "stock_icon_empty",
+            "Windows 没有返回有效的默认图标",
         ));
     }
 
     Ok(OwnedIcon {
-        handle: file_info.hIcon,
+        handle: stock_info.hIcon,
     })
+}
+
+// Shell 不可用时使用的轻量占位图标。它只作为最后回退，不影响真实图标提取。
+fn placeholder_image(is_directory: bool) -> RgbaImage {
+    let mut image = RgbaImage::from_pixel(ICON_SIZE, ICON_SIZE, Rgba([0, 0, 0, 0]));
+    let color = if is_directory {
+        Rgba([236, 184, 72, 255])
+    } else {
+        Rgba([202, 211, 224, 255])
+    };
+
+    fill_rect(&mut image, 40, 52, 216, 208, color);
+    if is_directory {
+        fill_rect(&mut image, 40, 40, 126, 72, color);
+    } else {
+        let line_color = Rgba([112, 126, 146, 255]);
+        for (top, right) in [(92, 192), (124, 176), (156, 160)] {
+            fill_rect(&mut image, 64, top, right, top + 12, line_color);
+        }
+    }
+
+    image
+}
+
+fn fill_rect(image: &mut RgbaImage, left: u32, top: u32, right: u32, bottom: u32, color: Rgba<u8>) {
+    for y in top..bottom {
+        for x in left..right {
+            image.put_pixel(x, y, color);
+        }
+    }
 }
 
 // 将 `HICON` 绘制到透明 DIB，并转换为 `image` 使用的 RGBA 顺序。
@@ -310,11 +440,8 @@ fn destroy_icon_if_valid(icon: HICON) {
 }
 
 // 将路径转换成以 NUL 结尾的 UTF-16 字符串。
-fn to_wide(path: &Path) -> Vec<u16> {
-    path.as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect()
+fn to_wide(path: &Path) -> AppResult<Vec<u16>> {
+    wide::nul_terminated(path.as_os_str(), "icon_invalid_path", "图标来源路径")
 }
 
 // 应用 ID 会参与构造文件名，只允许使用安全的文件名字符。

@@ -1,15 +1,11 @@
-use std::{
-    os::windows::{ffi::OsStrExt, process::CommandExt},
-    path::Path,
-    process::Command,
-};
+use std::{os::windows::process::CommandExt, path::Path, process::Command};
 
 use windows::{
     core::PCWSTR,
     Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL},
 };
 
-use crate::{error::AppResult, models::AppError};
+use crate::{error::AppResult, models::AppError, path, system::wide};
 
 // 统一启动一个用户保存的目标。
 //
@@ -48,14 +44,14 @@ fn spawn_program(
 ) -> AppResult<()> {
     let mut command = Command::new(target_path);
 
-    if let Some(directory) = working_dir.filter(|path| !path.as_os_str().is_empty()) {
+    if let Some(directory) = non_empty_path(working_dir) {
         command.current_dir(directory);
     }
 
     // 当前参数被定义为一个完整的 Windows 原始命令行字符串。
     // `raw_arg` 不会重新拆分或转义字符串，可以保留 Windows 参数中
     // 的引号、反斜杠和带空格的值。
-    if let Some(raw_arguments) = arguments.filter(|value| !value.trim().is_empty()) {
+    if let Some(raw_arguments) = non_empty_text(arguments) {
         if raw_arguments.contains('\0') {
             return Err(AppError::new(
                 "exec_invalid_arguments",
@@ -86,14 +82,10 @@ fn shell_open(
 ) -> AppResult<()> {
     let operation = to_wide_string("open", "exec_invalid_operation")?;
     let target = to_wide_path(target_path)?;
-    let parameters = match arguments.filter(|value| !value.trim().is_empty()) {
-        Some(value) => Some(to_wide_string(value, "exec_invalid_arguments")?),
-        None => None,
-    };
-    let directory = match working_dir.filter(|path| !path.as_os_str().is_empty()) {
-        Some(value) => Some(to_wide_path(value)?),
-        None => None,
-    };
+    let parameters = non_empty_text(arguments)
+        .map(|value| to_wide_string(value, "exec_invalid_arguments"))
+        .transpose()?;
+    let directory = non_empty_path(working_dir).map(to_wide_path).transpose()?;
 
     let parameter_ptr = parameters
         .as_deref()
@@ -136,21 +128,11 @@ fn shell_open(
 // `http://`、`https://` 等 Shell 目标，同时避免把原始参数交给
 // `cmd.exe` 解释。
 fn should_use_shell(target_path: &Path) -> bool {
-    let target = target_path.to_string_lossy();
-    let is_uri = target.contains("://") || target.starts_with("mailto:");
-
-    if is_uri || target_path.is_dir() {
+    if path::is_url_target(target_path) || target_path.is_dir() {
         return true;
     }
 
-    !matches!(
-        target_path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .map(|extension| extension.to_ascii_lowercase())
-            .as_deref(),
-        Some("exe") | Some("com")
-    )
+    !path::is_native_program(target_path)
 }
 
 // 防止空目标和带 NUL 的 Windows 字符串进入系统 API。
@@ -159,47 +141,32 @@ fn validate_target_path(target_path: &Path) -> AppResult<()> {
         return Err(AppError::new("exec_target_empty", "启动目标路径不能为空"));
     }
 
-    if target_path
-        .as_os_str()
-        .encode_wide()
-        .any(|character| character == 0)
-    {
-        return Err(AppError::new(
-            "exec_invalid_target",
-            "启动目标路径不能包含 NUL 字符",
-        ));
-    }
+    wide::reject_embedded_nul(
+        target_path.as_os_str(),
+        "exec_invalid_target",
+        "启动目标路径",
+    )
+}
 
-    Ok(())
+fn non_empty_path(path: Option<&Path>) -> Option<&Path> {
+    path.filter(|path| !path.as_os_str().is_empty())
+}
+
+fn non_empty_text(value: Option<&str>) -> Option<&str> {
+    value.filter(|value| !value.trim().is_empty())
+}
+
+// 将 Windows 字符串转换成以 NUL 结尾的 UTF-16 字符串。
+fn to_wide(value: &std::ffi::OsStr, error_code: &'static str, kind: &str) -> AppResult<Vec<u16>> {
+    wide::nul_terminated(value, error_code, kind)
 }
 
 // 将 Rust 字符串转换成以 NUL 结尾的 UTF-16 字符串。
 fn to_wide_string(value: &str, error_code: &'static str) -> AppResult<Vec<u16>> {
-    if value.encode_utf16().any(|character| character == 0) {
-        return Err(AppError::new(error_code, "Windows 字符串不能包含 NUL 字符"));
-    }
-
-    Ok(value.encode_utf16().chain(std::iter::once(0)).collect())
+    to_wide(std::ffi::OsStr::new(value), error_code, "字符串")
 }
 
 // 将 Windows 路径转换成以 NUL 结尾的 UTF-16 字符串。
 fn to_wide_path(path: &Path) -> AppResult<Vec<u16>> {
-    if path
-        .as_os_str()
-        .encode_wide()
-        .any(|character| character == 0)
-    {
-        return Err(AppError::new(
-            "exec_invalid_path",
-            "Windows 路径不能包含 NUL 字符",
-        ));
-    }
-
-    let value: Vec<u16> = path
-        .as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect();
-
-    Ok(value)
+    to_wide(path.as_os_str(), "exec_invalid_path", "路径")
 }

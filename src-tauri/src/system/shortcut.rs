@@ -1,4 +1,4 @@
-use std::{ffi::OsStr, os::windows::ffi::OsStrExt, path::Path};
+use std::{ffi::OsStr, path::Path};
 
 use windows::{
     core::{Interface, PCWSTR},
@@ -15,6 +15,8 @@ use windows::{
 use crate::{
     error::AppResult,
     models::{AppError, IconLocation, ParsedShortcut},
+    path,
+    system::wide,
 };
 
 // Windows Shell Link API 使用的宽字符缓冲区大小。
@@ -37,7 +39,7 @@ pub(crate) fn parse_shortcut(path: &Path) -> AppResult<ParsedShortcut> {
     }
 
     let _com = ComApartment::initialize()?;
-    let wide_path = to_wide(path.as_os_str());
+    let wide_path = to_wide(path.as_os_str())?;
 
     let shell_link: IShellLinkW = unsafe {
         CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)
@@ -129,8 +131,8 @@ impl Drop for ComApartment {
 }
 
 // 把 Rust 的 Windows 路径转换成以 NUL 结尾的 UTF-16 字符串。
-fn to_wide(value: &OsStr) -> Vec<u16> {
-    value.encode_wide().chain(std::iter::once(0)).collect()
+fn to_wide(value: &OsStr) -> AppResult<Vec<u16>> {
+    wide::nul_terminated(value, "shortcut_invalid_path", "快捷方式路径")
 }
 
 // 读取 Windows API 写入的 NUL 结尾 UTF-16 缓冲区。
@@ -145,11 +147,7 @@ fn read_wide_string(buffer: &[u16]) -> Option<String> {
 
 // 默认使用快捷方式文件名作为前端展示名称。
 fn shortcut_name(path: &Path) -> String {
-    path.file_stem()
-        .or_else(|| path.file_name())
-        .map(|name| name.to_string_lossy().into_owned())
-        .filter(|name| !name.is_empty())
-        .unwrap_or_else(|| "快捷方式".to_owned())
+    path::display_name(path, "快捷方式")
 }
 
 // 将 Windows API 错误统一转换成项目错误模型。

@@ -1,15 +1,23 @@
 use std::{
-    fs::{self, File},
+    fs::{self, File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
+    thread,
+    time::{Duration, Instant},
 };
 
-use super::{DataRepository, SettingsRepository};
+use super::{mutate_snapshot, DataRepository, SettingsRepository};
 use crate::{
     error::AppResult,
     models::{AppData, Settings},
 };
+use fs2::FileExt;
+use uuid::Uuid;
+
+// 锁等待上限。锁的拥有者崩溃时操作系统会释放文件锁；上限用于避免
+// 文件损坏、权限变化或外部程序长期占锁时让前端请求永久阻塞。
+const LOCK_TIMEOUT: Duration = Duration::from_secs(10);
+const LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(25);
 
 #[derive(Debug, Clone)]
 pub struct JsonStore {
@@ -17,6 +25,8 @@ pub struct JsonStore {
     config_path: PathBuf,
     data_path: PathBuf,
     icons_path: PathBuf,
+    config_lock_path: PathBuf,
+    data_lock_path: PathBuf,
 }
 
 impl JsonStore {
@@ -25,11 +35,17 @@ impl JsonStore {
         let config_path = path.join("config/config.json");
         let data_path = path.join("config/data.json");
         let icons_path = path.join("icons");
+        // 锁文件独立于 JSON 文件。原子替换会更换 JSON 文件本身，
+        // 因此不能把锁绑定在会被替换的目标文件句柄上。
+        let config_lock_path = path.join("config/config.json.lock");
+        let data_lock_path = path.join("config/data.json.lock");
         Self {
             path,
             config_path,
             data_path,
             icons_path,
+            config_lock_path,
+            data_lock_path,
         }
     }
     // 创建程序运行所需的目录和两个 JSON 文件。
@@ -41,12 +57,14 @@ impl JsonStore {
         let icons_dir = self.path.join("icons");
         fs::create_dir_all(&config_dir)?;
         fs::create_dir_all(&icons_dir)?;
-        if !self.data_path.exists() {
-            self.save_data(&AppData::default())?;
-        }
-        if !self.config_path.exists() {
-            self.save_settings(&Settings::default())?;
-        }
+        // 存在性检查必须在同一把锁内重新执行，否则两个进程可能同时
+        // 判断文件不存在，并用默认值覆盖彼此的初始化结果。
+        self.ensure_file(&self.data_path, &self.data_lock_path, &AppData::default())?;
+        self.ensure_file(
+            &self.config_path,
+            &self.config_lock_path,
+            &Settings::default(),
+        )?;
         Ok(())
     }
 
@@ -62,9 +80,64 @@ impl JsonStore {
         &self.data_path
     }
 
-    pub(crate) fn icons_path(&self) -> &Path {
+    pub fn icons_path(&self) -> &Path {
         &self.icons_path
     }
+
+    // 加锁lock并执行一个操作operation()
+    fn with_file_lock<T, F>(&self, lock_path: &Path, operation: F) -> AppResult<T>
+    where
+        F: FnOnce() -> AppResult<T>,
+    {
+        let _lock = FileLock::acquire(lock_path)?;
+        operation()
+    }
+
+    fn ensure_file<T>(&self, file_path: &Path, lock_path: &Path, default_value: &T) -> AppResult<()>
+    where
+        T: serde::Serialize,
+    {
+        self.with_file_lock(lock_path, || {
+            if !file_path.exists() {
+                Self::write_json(file_path, default_value)?;
+            }
+            Ok(())
+        })
+    }
+
+    fn read_locked<T>(&self, file_path: &Path, lock_path: &Path) -> AppResult<T>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        self.with_file_lock(lock_path, || Self::read_json(file_path))
+    }
+
+    fn write_locked<T>(&self, file_path: &Path, lock_path: &Path, value: &T) -> AppResult<()>
+    where
+        T: serde::Serialize,
+    {
+        self.with_file_lock(lock_path, || Self::write_json(file_path, value))
+    }
+
+    fn mutate_locked<T, Operation, R>(
+        &self,
+        file_path: &Path,
+        lock_path: &Path,
+        operation: Operation,
+    ) -> AppResult<R>
+    where
+        T: serde::de::DeserializeOwned + serde::Serialize,
+        Operation: FnOnce(&mut T) -> AppResult<R>,
+    {
+        self.with_file_lock(lock_path, || {
+            mutate_snapshot(
+                || Self::read_json(file_path),
+                |value| Self::write_json(file_path, value),
+                operation,
+            )
+        })
+    }
+
     fn read_json<T>(path: &Path) -> AppResult<T>
     where
         T: serde::de::DeserializeOwned,
@@ -81,6 +154,88 @@ impl JsonStore {
     }
 }
 
+// 跨进程文件锁的 RAII 封装。
+//
+// 锁文件本身可以一直留在磁盘上；真正的锁状态属于这个 File 句柄，
+// 句柄关闭或进程退出后由操作系统自动释放，不需要删除锁文件。
+struct FileLock {
+    file: File,
+    path: PathBuf,
+}
+
+impl FileLock {
+    fn acquire(path: &Path) -> AppResult<Self> {
+        let parent = path.parent().ok_or_else(|| {
+            crate::models::AppError::new("storage_lock_path_invalid", "锁文件没有有效的父目录")
+        })?;
+        fs::create_dir_all(parent).map_err(|error| {
+            crate::models::AppError::new(
+                "storage_lock_open_failed",
+                format!("无法创建锁文件目录 {}: {error}", parent.display()),
+            )
+        })?;
+
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+            .map_err(|error| {
+                crate::models::AppError::new(
+                    "storage_lock_open_failed",
+                    format!("无法打开锁文件 {}: {error}", path.display()),
+                )
+            })?;
+
+        let started = Instant::now();
+        loop {
+            match FileExt::try_lock_exclusive(&file) {
+                Ok(()) => {
+                    return Ok(Self {
+                        file,
+                        path: path.to_path_buf(),
+                    });
+                }
+                Err(error) if is_lock_contention(&error) => {
+                    if started.elapsed() >= LOCK_TIMEOUT {
+                        return Err(crate::models::AppError::new(
+                            "storage_lock_timeout",
+                            format!("等待锁文件超时: {}", path.display()),
+                        ));
+                    }
+                    thread::sleep(LOCK_RETRY_INTERVAL);
+                }
+                Err(error) => {
+                    return Err(crate::models::AppError::new(
+                        "storage_lock_failed",
+                        format!("无法锁定文件 {}: {error}", path.display()),
+                    ));
+                }
+            }
+        }
+    }
+}
+
+impl Drop for FileLock {
+    fn drop(&mut self) {
+        // Drop 无法返回错误；记录失败并继续释放 File，让操作系统完成
+        // 句柄级别的清理。正常路径下 unlock 不会失败。
+        if let Err(error) = FileExt::unlock(&self.file) {
+            log::warn!("释放 JSON 锁文件 {} 失败: {error}", self.path.display());
+        }
+    }
+}
+
+fn is_lock_contention(error: &std::io::Error) -> bool {
+    let expected = fs2::lock_contended_error();
+
+    match (error.raw_os_error(), expected.raw_os_error()) {
+        (Some(actual), Some(expected)) => actual == expected,
+        _ => error.kind() == expected.kind(),
+    }
+}
+
 // 将完整 JSON 内容写入同目录临时文件，再替换目标文件。
 //
 // 临时文件和目标文件位于同一目录，保证替换操作发生在同一文件系统
@@ -94,8 +249,14 @@ fn atomic_write(path: &Path, content: &[u8]) -> AppResult<()> {
     fs::create_dir_all(parent)?;
 
     let temp_path = temporary_path(path)?;
+    let mut temp_created = false;
     let write_result = (|| -> AppResult<()> {
-        let mut file = File::create(&temp_path)?;
+        // create_new 防止临时文件名冲突导致覆盖其他写入者的临时内容。
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)?;
+        temp_created = true;
         file.write_all(content)?;
         file.flush()?;
         file.sync_all()?;
@@ -104,7 +265,7 @@ fn atomic_write(path: &Path, content: &[u8]) -> AppResult<()> {
         replace_file(&temp_path, path)
     })();
 
-    if write_result.is_err() {
+    if temp_created && write_result.is_err() {
         let _ = fs::remove_file(&temp_path);
     }
 
@@ -116,12 +277,7 @@ fn temporary_path(path: &Path) -> AppResult<PathBuf> {
         .file_name()
         .and_then(|name| name.to_str())
         .ok_or_else(|| crate::models::AppError::new("json_name_invalid", "JSON 文件名无效"))?;
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_err(|error| crate::models::AppError::new("json_clock_error", error.to_string()))?
-        .as_nanos();
-
-    Ok(path.with_file_name(format!(".{file_name}.{timestamp}.tmp")))
+    Ok(path.with_file_name(format!(".{file_name}.{}.tmp", Uuid::new_v4())))
 }
 
 #[cfg(windows)]
@@ -169,18 +325,34 @@ fn wide_path(path: &Path) -> Vec<u16> {
 
 impl DataRepository for JsonStore {
     fn load_data(&self) -> AppResult<AppData> {
-        Self::read_json(self.data_path.as_path())
+        self.read_locked(&self.data_path, &self.data_lock_path)
     }
     fn save_data(&self, value: &AppData) -> AppResult<()> {
-        Self::write_json(self.data_path.as_path(), value)
+        self.write_locked(&self.data_path, &self.data_lock_path, value)
+    }
+
+    fn mutate_data<F, R>(&self, operation: F) -> AppResult<R>
+    where
+        F: FnOnce(&mut AppData) -> AppResult<R>,
+    {
+        // 读取、业务修改和原子替换必须共享同一把跨进程锁；否则两个
+        // 进程都基于旧快照修改时，后写入者会丢失前一个进程的更新。
+        self.mutate_locked(&self.data_path, &self.data_lock_path, operation)
     }
 }
 
 impl SettingsRepository for JsonStore {
     fn load_settings(&self) -> AppResult<Settings> {
-        Self::read_json(self.config_path.as_path())
+        self.read_locked(&self.config_path, &self.config_lock_path)
     }
     fn save_settings(&self, settings: &Settings) -> AppResult<()> {
-        Self::write_json(self.config_path.as_path(), settings)
+        self.write_locked(&self.config_path, &self.config_lock_path, settings)
+    }
+
+    fn mutate_settings<F, R>(&self, operation: F) -> AppResult<R>
+    where
+        F: FnOnce(&mut Settings) -> AppResult<R>,
+    {
+        self.mutate_locked(&self.config_path, &self.config_lock_path, operation)
     }
 }

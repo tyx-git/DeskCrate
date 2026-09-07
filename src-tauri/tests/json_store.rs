@@ -1,6 +1,6 @@
 mod support;
 
-use std::fs;
+use std::{env, fs, process::Command};
 
 use app_lib::{
     error::AppResult,
@@ -32,6 +32,8 @@ fn store_exposes_the_expected_paths_and_creates_layout() {
     assert!(directory.child("icons").is_dir());
     assert!(store.config_path().is_file());
     assert!(store.data_path().is_file());
+    assert!(directory.child("config/data.json.lock").is_file());
+    assert!(directory.child("config/config.json.lock").is_file());
 }
 
 #[test]
@@ -203,4 +205,62 @@ fn repository_traits_are_implemented_by_json_store() {
         use_settings_repository(&store).unwrap(),
         Settings::default()
     );
+}
+
+#[test]
+fn concurrent_process_mutations_do_not_lose_updates() {
+    const WORKER_COUNT: usize = 4;
+    const ITERATIONS: usize = 20;
+    const PATH_ENV: &str = "DESKCRATE_JSON_STORE_WORKER_PATH";
+
+    let directory = TestDir::new("cross-process-lock");
+    let store = directory.store();
+    let test_binary = env::current_exe().expect("test executable path should be available");
+
+    let mut children = Vec::with_capacity(WORKER_COUNT);
+    for _ in 0..WORKER_COUNT {
+        let child = Command::new(&test_binary)
+            .args(["--exact", "cross_process_mutation_worker", "--nocapture"])
+            .env(PATH_ENV, directory.path())
+            .env(
+                "DESKCRATE_JSON_STORE_WORKER_ITERATIONS",
+                ITERATIONS.to_string(),
+            )
+            .spawn()
+            .expect("worker process should start");
+        children.push(child);
+    }
+
+    for mut child in children {
+        let status = child.wait().expect("worker process should finish");
+        assert!(status.success(), "worker process failed: {status}");
+    }
+
+    let data = store.load_data().expect("data should remain readable");
+    assert_eq!(data.categories.len(), WORKER_COUNT * ITERATIONS);
+    assert_eq!(data.version, AppData::default().version);
+}
+
+#[test]
+fn cross_process_mutation_worker() {
+    const PATH_ENV: &str = "DESKCRATE_JSON_STORE_WORKER_PATH";
+
+    let Some(path) = env::var_os(PATH_ENV) else {
+        return;
+    };
+    let iterations = env::var("DESKCRATE_JSON_STORE_WORKER_ITERATIONS")
+        .expect("worker iteration count should be set")
+        .parse::<usize>()
+        .expect("worker iteration count should be valid");
+
+    let store = JsonStore::new(path);
+    for iteration in 0..iterations {
+        let id = format!("worker-{}-{iteration}", std::process::id());
+        store
+            .mutate_data(|data| {
+                data.categories.push(category(&id, "并发写入"));
+                Ok::<_, AppError>(())
+            })
+            .expect("worker mutation should succeed");
+    }
 }

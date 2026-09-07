@@ -36,7 +36,10 @@ pub fn initialize_window<R: tauri::Runtime>(
         store.load_settings()?
     };
 
-    let (position, size) = if settings.window.is_initialized {
+    let needs_initialization = !settings.window.is_initialized;
+    let (position, size) = if needs_initialization {
+        first_launch_geometry(window)?
+    } else {
         let position = settings
             .window
             .position
@@ -47,32 +50,14 @@ pub fn initialize_window<R: tauri::Runtime>(
             .ok_or_else(|| invalid_window_state("已初始化配置缺少窗口大小"))?;
         validate_window_size(size)?;
         (position, size)
-    } else {
-        let (position, size) = first_launch_geometry(window)?;
-        apply_geometry(window, position, size)?;
-
-        let store = state.get_lock()?;
-        store.mutate_settings(|current| {
-            current.window.is_initialized = true;
-            current.window.position = Some(position);
-            current.window.size = Some(size);
-            Ok(())
-        })?;
-
-        return Ok(WindowInitResponse {
-            is_initialized: true,
-            position,
-            size,
-        });
     };
 
     apply_geometry(window, position, size)?;
+    if needs_initialization {
+        persist_geometry(state, position, size)?;
+    }
 
-    Ok(WindowInitResponse {
-        is_initialized: true,
-        position,
-        size,
-    })
+    Ok(WindowInitResponse::new(position, size))
 }
 
 // 保存窗口退出前的实际客户区位置和大小。
@@ -99,6 +84,21 @@ pub fn persist_window_state(
         height: size.height.max(MIN_WINDOW_DIMENSION),
     };
 
+    persist_geometry(state, position, size)
+}
+
+impl WindowInitResponse {
+    fn new(position: WindowPosition, size: WindowSize) -> Self {
+        Self {
+            is_initialized: true,
+            position,
+            size,
+        }
+    }
+}
+
+// 统一持久化窗口几何信息，避免首次初始化和退出保存分别维护同一组字段。
+fn persist_geometry(state: &AppState, position: WindowPosition, size: WindowSize) -> AppResult<()> {
     let store = state.get_lock()?;
     store.mutate_settings(|settings| {
         settings.window.is_initialized = true;
@@ -175,8 +175,7 @@ fn invalid_window_state(message: impl Into<String>) -> crate::models::AppError {
     crate::models::AppError::new("invalid_window_state", message)
 }
 
-// 保留这个函数名作为 service 层状态机入口的语义别名，便于 commands
-// 层暴露 `is_init`，同时把实际逻辑集中在 `initialize_window`。
+// 保留既有服务层入口；实际状态机逻辑集中在 `initialize_window`。
 pub fn is_init(
     state: &AppState,
     window: &tauri::WebviewWindow<impl tauri::Runtime>,

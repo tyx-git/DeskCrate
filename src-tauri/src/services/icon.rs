@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use crate::{
     error::AppResult,
     models::{IconExtractionResult, ParsedShortcut},
+    path,
     storage::JsonStore,
     system::{icon_extract::IconExtractor, shortcut},
 };
@@ -64,12 +65,12 @@ impl IconService {
         source_path: &Path,
         app_id: &str,
     ) -> AppResult<IconExtractionResult> {
-        if is_shortcut(source_path) {
+        if path::is_shortcut(source_path) {
             let shortcut = self.parse_shortcut(source_path)?;
             return self.extract_from_shortcut(&shortcut, app_id);
         }
 
-        if is_executable(source_path) {
+        if path::is_executable(source_path) {
             return self.extractor.extract_file(source_path, 0, app_id);
         }
 
@@ -119,19 +120,6 @@ fn encode_uri_component(path: &Path) -> String {
 }
 
 const HEX: &[u8; 16] = b"0123456789ABCDEF";
-
-// 判断路径是否为 Windows 快捷方式。
-fn is_shortcut(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("lnk"))
-}
-
-fn is_executable(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"))
-}
 
 // 计算快捷方式实际使用的图标来源。
 fn shortcut_icon_source(shortcut: &ParsedShortcut) -> AppResult<(PathBuf, i32)> {

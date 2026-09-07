@@ -1,5 +1,6 @@
 pub mod catalog;
-pub mod icon;
+pub(crate) mod icon;
 pub mod settings;
 pub mod system;
+pub(crate) mod tree;
 pub mod window;

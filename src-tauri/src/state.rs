@@ -13,8 +13,9 @@ impl AppState {
         }
     }
     pub(crate) fn get_lock(&self) -> AppResult<MutexGuard<'_, JsonStore>> {
-        self.store
-            .lock()
-            .map_err(|_| AppError::new("get_lock_failed", "无法获取内存锁"))
+        self.store.lock().map_err(|_| {
+            log::error!("AppState 的共享存储锁已中毒");
+            AppError::new("get_lock_failed", "无法获取内存锁")
+        })
     }
 }

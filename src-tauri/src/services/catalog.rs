@@ -9,11 +9,12 @@ use crate::{
         AddAppRequest, AddCategoryRequest, AddGroupRequest, AppData, AppEXE, AppError, Category,
         DeleteRequest, Group, IconType, Item, RenameRequest,
     },
+    path,
     state::AppState,
     storage::DataRepository,
 };
 
-use super::icon::IconService;
+use super::{icon::IconService, tree};
 
 // 分组树允许的最大深度；顶层分类下的直接分组算第 1 层。
 const MAX_GROUP_DEPTH: usize = 4;
@@ -33,7 +34,7 @@ pub fn get_all_data(state: &AppState) -> AppResult<AppData> {
 // 前端只提供分类名称。分类 ID、折叠状态、子节点集合和创建时间
 // 都由后端生成，避免客户端伪造持久化元数据。
 pub fn add_category(state: &AppState, request: AddCategoryRequest) -> AppResult<Category> {
-    let name = normalize_name(request.name, "invalid_category_name", "分类")?;
+    let name = normalize_name(&request.name, "invalid_category_name", "分类")?;
 
     let category = Category {
         id: Uuid::new_v4().to_string(),
@@ -55,14 +56,11 @@ pub fn add_category(state: &AppState, request: AddCategoryRequest) -> AppResult<
 // 按 UUID 重命名顶层分类。
 pub fn rename_category(state: &AppState, request: RenameRequest) -> AppResult<Category> {
     validate_id(&request.id)?;
-    let name = normalize_name(request.name, "invalid_category_name", "分类")?;
+    let name = normalize_name(&request.name, "invalid_category_name", "分类")?;
 
     let store = state.get_lock()?;
     store.mutate_data(|data| {
-        let category = data
-            .categories
-            .iter_mut()
-            .find(|category| category.id == request.id)
+        let category = tree::find_category_mut(data, &request.id)
             .ok_or_else(|| not_found("category_not_found", "分类", &request.id))?;
 
         category.name = name;
@@ -74,17 +72,16 @@ pub fn rename_category(state: &AppState, request: RenameRequest) -> AppResult<Ca
 pub fn delete_category(state: &AppState, request: DeleteRequest) -> AppResult<()> {
     validate_id(&request.id)?;
 
-    let store = state.get_lock()?;
-    let removed = store.mutate_data(|data| {
-        let index = data
-            .categories
-            .iter()
-            .position(|category| category.id == request.id)
-            .ok_or_else(|| not_found("category_not_found", "分类", &request.id))?;
-
-        Ok(data.categories.remove(index))
-    })?;
-    cleanup_category_icons(&removed, store.icons_path());
+    let (removed, icons_dir) = {
+        let store = state.get_lock()?;
+        let removed = store.mutate_data(|data| {
+            let removed = tree::remove_category(data, &request.id)
+                .ok_or_else(|| not_found("category_not_found", "分类", &request.id))?;
+            Ok(removed)
+        })?;
+        (removed, store.icons_path().to_path_buf())
+    };
+    cleanup_category_icons(&removed, &icons_dir);
     Ok(())
 }
 
@@ -94,9 +91,7 @@ pub fn delete_category(state: &AppState, request: DeleteRequest) -> AppResult<()
 // 因此后续即使开放四层以内的分组嵌套，也不需要改变 Command API。
 pub fn add_group(state: &AppState, request: AddGroupRequest) -> AppResult<Group> {
     validate_id(&request.parent_id)?;
-    let name = normalize_name(request.name, "invalid_group_name", "分组")?;
-
-    let store = state.get_lock()?;
+    let name = normalize_name(&request.name, "invalid_group_name", "分组")?;
 
     let group = Group {
         id: Uuid::new_v4().to_string(),
@@ -106,8 +101,9 @@ pub fn add_group(state: &AppState, request: AddGroupRequest) -> AppResult<Group>
         created_time: Utc::now().to_rfc3339(),
     };
 
+    let store = state.get_lock()?;
     store.mutate_data(|data| {
-        let parent_depth = parent_depth(data, &request.parent_id)
+        let parent_depth = tree::parent_depth(data, &request.parent_id)
             .ok_or_else(|| not_found("parent_not_found", "分组的父节点", &request.parent_id))?;
 
         if parent_depth >= MAX_GROUP_DEPTH {
@@ -117,14 +113,12 @@ pub fn add_group(state: &AppState, request: AddGroupRequest) -> AppResult<Group>
             ));
         }
 
-        if !append_group(data, &request.parent_id, group.clone()) {
-            return Err(not_found(
-                "parent_not_found",
-                "分组的父节点",
-                &request.parent_id,
-            ));
-        }
-        Ok(())
+        append_item(
+            data,
+            &request.parent_id,
+            Item::Group(group.clone()),
+            "分组的父节点",
+        )
     })?;
     Ok(group)
 }
@@ -132,11 +126,11 @@ pub fn add_group(state: &AppState, request: AddGroupRequest) -> AppResult<Group>
 // 按 UUID 重命名任意层级的子分组。
 pub fn rename_group(state: &AppState, request: RenameRequest) -> AppResult<Group> {
     validate_id(&request.id)?;
-    let name = normalize_name(request.name, "invalid_group_name", "分组")?;
+    let name = normalize_name(&request.name, "invalid_group_name", "分组")?;
 
     let store = state.get_lock()?;
     store.mutate_data(|data| {
-        let group = find_group_mut(data, &request.id)
+        let group = tree::find_group_mut(data, &request.id)
             .ok_or_else(|| not_found("group_not_found", "分组", &request.id))?;
 
         group.name = name;
@@ -146,15 +140,13 @@ pub fn rename_group(state: &AppState, request: RenameRequest) -> AppResult<Group
 
 // 按 UUID 删除任意层级的子分组及其全部后代。
 pub fn delete_group(state: &AppState, request: DeleteRequest) -> AppResult<()> {
-    validate_id(&request.id)?;
-
-    let store = state.get_lock()?;
-    let removed = store.mutate_data(|data| {
-        remove_item_from_data(data, &request.id, ItemKind::Group)
-            .ok_or_else(|| not_found("group_not_found", "分组", &request.id))
-    })?;
-    cleanup_item_icons(&removed, store.icons_path());
-    Ok(())
+    delete_item(
+        state,
+        request,
+        tree::NodeKind::Group,
+        "group_not_found",
+        "分组",
+    )
 }
 
 // 新增应用或快捷方式。
@@ -170,13 +162,16 @@ pub fn delete_group(state: &AppState, request: DeleteRequest) -> AppResult<()> {
 pub fn add_app(state: &AppState, request: AddAppRequest) -> AppResult<AppEXE> {
     validate_id(&request.parent_id)?;
     let source = normalize_source(request.source_path)?;
+    if let Source::LocalPath(source_path) = &source {
+        validate_local_source(source_path)?;
+    }
     let app_id = Uuid::new_v4().to_string();
 
     // 只在这里持锁读取父节点和复制图标目录；后续系统操作不持有锁。
     let icon_service = {
         let store = state.get_lock()?;
         let data = store.load_data()?;
-        if !parent_exists(&data, &request.parent_id) {
+        if !tree::parent_exists(&data, &request.parent_id) {
             return Err(not_found(
                 "parent_not_found",
                 "应用的父节点",
@@ -186,63 +181,20 @@ pub fn add_app(state: &AppState, request: AddAppRequest) -> AppResult<AppEXE> {
         IconService::from_store(&store)
     };
 
-    let (name, working_dir, arguments, icon_type, icon_url, cache_path) =
-        if let Source::Url(url) = &source {
-            let name = choose_app_name(request.name.as_deref(), default_url_name(url))?;
-
-            // URL 没有本地文件图标，使用 service 层提供的内置 SVG data URL；
-            // 它本身就是可加载资源，不需要把 URL 伪装成本地路径。
-            (
-                name,
-                None,
-                None,
-                IconType::Url,
-                DEFAULT_URL_ICON_URL.to_owned(),
-                None,
-            )
-        } else {
-            let Source::LocalPath(source_path) = &source else {
-                unreachable!("来源类型已在上面的 URL 分支处理")
-            };
-            let is_shortcut = is_shortcut_path(source_path);
-
-            if is_shortcut {
-                let shortcut = icon_service.parse_shortcut(source_path)?;
-                // 这里必须复制名称：后面还要借用完整的 `shortcut` 提取图标。
-                // 直接移动 `shortcut.name` 会使 `shortcut` 部分移动，无法再借用。
-                let name = choose_app_name(request.name.as_deref(), shortcut.name.clone())?;
-                let icon_result = icon_service.extract_from_shortcut(&shortcut, &app_id)?;
-                let icon_url = IconService::asset_url(&icon_result.cache_path);
-
-                (
-                    name,
-                    shortcut.working_dir,
-                    shortcut.arguments,
-                    IconType::Shortcut,
-                    icon_url,
-                    Some(icon_result.cache_path),
-                )
-            } else {
-                let name = choose_app_name(request.name.as_deref(), default_app_name(source_path))?;
-                let icon_result = icon_service.extract_from_path(source_path, &app_id)?;
-                let icon_type = classify_source(source_path);
-                let icon_url = IconService::asset_url(&icon_result.cache_path);
-
-                (
-                    name,
-                    None,
-                    None,
-                    icon_type,
-                    icon_url,
-                    Some(icon_result.cache_path),
-                )
-            }
-        };
+    let prepared = prepare_app(&source, request.name.as_deref(), &app_id, &icon_service)?;
+    let PreparedApp {
+        name,
+        working_dir,
+        arguments,
+        icon_type,
+        icon_url,
+        cache_path,
+    } = prepared;
 
     let app = AppEXE {
         id: app_id,
         name,
-        source_path: source.as_string(),
+        source_path: source.into_string(),
         arguments,
         working_dir,
         icon_url,
@@ -258,15 +210,12 @@ pub fn add_app(state: &AppState, request: AddAppRequest) -> AppResult<AppEXE> {
         }
     };
     if let Err(error) = store.mutate_data(|data| {
-        if append_app(data, &request.parent_id, app.clone()) {
-            Ok(())
-        } else {
-            Err(not_found(
-                "parent_not_found",
-                "应用的父节点",
-                &request.parent_id,
-            ))
-        }
+        append_item(
+            data,
+            &request.parent_id,
+            Item::App(app.clone()),
+            "应用的父节点",
+        )
     }) {
         drop(store);
         remove_cached_icon(cache_path.as_deref());
@@ -279,11 +228,11 @@ pub fn add_app(state: &AppState, request: AddAppRequest) -> AppResult<AppEXE> {
 // 按 UUID 重命名应用。
 pub fn rename_app(state: &AppState, request: RenameRequest) -> AppResult<AppEXE> {
     validate_id(&request.id)?;
-    let name = normalize_name(request.name, "invalid_app_name", "应用")?;
+    let name = normalize_name(&request.name, "invalid_app_name", "应用")?;
 
     let store = state.get_lock()?;
     store.mutate_data(|data| {
-        let app = find_app_mut(data, &request.id)
+        let app = tree::find_app_mut(data, &request.id)
             .ok_or_else(|| not_found("app_not_found", "应用", &request.id))?;
 
         app.name = name;
@@ -293,203 +242,115 @@ pub fn rename_app(state: &AppState, request: RenameRequest) -> AppResult<AppEXE>
 
 // 按 UUID 删除应用。
 pub fn delete_app(state: &AppState, request: DeleteRequest) -> AppResult<()> {
+    delete_item(state, request, tree::NodeKind::App, "app_not_found", "应用")
+}
+
+// 在顶层分类或嵌套分组下追加一个节点。
+//
+// 分类和分组都可以作为父节点，应用与分组只是插入位置不同、节点类型
+// 不同；统一接收 `Item` 可以避免维护两份完全相同的查找逻辑。
+fn append_item(
+    data: &mut AppData,
+    parent_id: &str,
+    item: Item,
+    parent_name: &'static str,
+) -> AppResult<()> {
+    if tree::append_child(data, parent_id, item) {
+        Ok(())
+    } else {
+        Err(not_found("parent_not_found", parent_name, parent_id))
+    }
+}
+
+// 删除应用或分组的公共流程：先在原子事务中移除节点，再释放仓储锁，
+// 最后清理图标缓存，避免文件系统操作占用内存锁。
+fn delete_item(
+    state: &AppState,
+    request: DeleteRequest,
+    kind: tree::NodeKind,
+    error_code: &'static str,
+    entity_name: &'static str,
+) -> AppResult<()> {
     validate_id(&request.id)?;
 
-    let store = state.get_lock()?;
-    let removed = store.mutate_data(|data| {
-        remove_item_from_data(data, &request.id, ItemKind::App)
-            .ok_or_else(|| not_found("app_not_found", "应用", &request.id))
-    })?;
-    cleanup_item_icons(&removed, store.icons_path());
+    let (removed, icons_dir) = {
+        let store = state.get_lock()?;
+        let removed = store.mutate_data(|data| {
+            tree::remove_node(data, &request.id, kind)
+                .ok_or_else(|| not_found(error_code, entity_name, &request.id))
+        })?;
+        (removed, store.icons_path().to_path_buf())
+    };
+
+    cleanup_item_icons(&removed, &icons_dir);
     Ok(())
 }
 
-// 目录树节点种类，用于删除时避免用错误的接口删除另一种节点。
-#[derive(Clone, Copy)]
-enum ItemKind {
-    Group,
-    App,
+// 图标、快捷方式字段和展示名称在写入 AppEXE 前统一整理成这个中间结果，
+// 让 `add_app` 只负责仓储事务，不承担多分支字段组装。
+struct PreparedApp {
+    name: String,
+    working_dir: Option<String>,
+    arguments: Option<String>,
+    icon_type: IconType,
+    icon_url: String,
+    cache_path: Option<PathBuf>,
 }
 
-// 在顶层分类或嵌套分组下追加分组。
-fn append_group(data: &mut AppData, parent_id: &str, group: Group) -> bool {
-    if let Some(category) = data
-        .categories
-        .iter_mut()
-        .find(|category| category.id == parent_id)
-    {
-        category.groups.push(Item::Group(group));
-        return true;
-    }
-
-    if let Some(parent) = find_group_mut(data, parent_id) {
-        parent.children.push(Item::Group(group));
-        return true;
-    }
-
-    false
-}
-
-// 在顶层分类或嵌套分组下追加应用。
-fn append_app(data: &mut AppData, parent_id: &str, app: AppEXE) -> bool {
-    if let Some(category) = data
-        .categories
-        .iter_mut()
-        .find(|category| category.id == parent_id)
-    {
-        category.groups.push(Item::App(app));
-        return true;
-    }
-
-    if let Some(parent) = find_group_mut(data, parent_id) {
-        parent.children.push(Item::App(app));
-        return true;
-    }
-
-    false
-}
-
-// 在所有分类中递归查找分组。
-fn find_group_mut<'a>(data: &'a mut AppData, id: &str) -> Option<&'a mut Group> {
-    for category in &mut data.categories {
-        if let Some(group) = find_group_in_items_mut(&mut category.groups, id) {
-            return Some(group);
+fn prepare_app(
+    source: &Source,
+    requested_name: Option<&str>,
+    app_id: &str,
+    icon_service: &IconService,
+) -> AppResult<PreparedApp> {
+    match source {
+        Source::Url(url) => {
+            let fallback = default_url_name(url);
+            Ok(PreparedApp {
+                name: choose_app_name(requested_name, &fallback)?,
+                working_dir: None,
+                arguments: None,
+                icon_type: IconType::Url,
+                // URL 没有本地文件图标，使用 service 层提供的内置 SVG data URL。
+                icon_url: DEFAULT_URL_ICON_URL.to_owned(),
+                cache_path: None,
+            })
         }
-    }
+        Source::LocalPath(source_path) if path::is_shortcut(source_path) => {
+            let shortcut = icon_service.parse_shortcut(source_path)?;
+            let name = choose_app_name(requested_name, &shortcut.name)?;
+            let icon_result = icon_service.extract_from_shortcut(&shortcut, app_id)?;
+            let icon_url = IconService::asset_url(&icon_result.cache_path);
 
-    None
-}
-
-fn find_group_in_items_mut<'a>(items: &'a mut [Item], id: &str) -> Option<&'a mut Group> {
-    for item in items {
-        if let Item::Group(group) = item {
-            // 先在当前节点结束 ID 比较产生的借用，再递归借用 children。
-            // 使用 match guard 会让编译器认为同一个枚举字段的可变借用
-            // 仍然跨越后续分支，从而触发 E0499。
-            if group.id == id {
-                return Some(group);
-            }
-
-            if let Some(found) = find_group_in_items_mut(&mut group.children, id) {
-                return Some(found);
-            }
+            Ok(PreparedApp {
+                name,
+                working_dir: shortcut.working_dir,
+                arguments: shortcut.arguments,
+                icon_type: IconType::Shortcut,
+                icon_url,
+                cache_path: Some(icon_result.cache_path),
+            })
         }
-    }
-    None
-}
+        Source::LocalPath(source_path) => {
+            let fallback = default_app_name(source_path);
+            let name = choose_app_name(requested_name, &fallback)?;
+            let icon_result = icon_service.extract_from_path(source_path, app_id)?;
+            let icon_url = IconService::asset_url(&icon_result.cache_path);
 
-// 在所有分类中递归查找应用。
-fn find_app_mut<'a>(data: &'a mut AppData, id: &str) -> Option<&'a mut AppEXE> {
-    for category in &mut data.categories {
-        if let Some(app) = find_app_in_items_mut(&mut category.groups, id) {
-            return Some(app);
+            Ok(PreparedApp {
+                name,
+                working_dir: None,
+                arguments: None,
+                icon_type: classify_source(source_path),
+                icon_url,
+                cache_path: Some(icon_result.cache_path),
+            })
         }
-    }
-
-    None
-}
-
-fn find_app_in_items_mut<'a>(items: &'a mut [Item], id: &str) -> Option<&'a mut AppEXE> {
-    for item in items {
-        if let Item::App(app) = item {
-            // 与分组查找保持相同的借用边界：先比较当前应用 ID，
-            // 只有当前节点不匹配时才继续处理其他节点。
-            if app.id == id {
-                return Some(app);
-            }
-        } else if let Item::Group(group) = item {
-            if let Some(found) = find_app_in_items_mut(&mut group.children, id) {
-                return Some(found);
-            }
-        }
-    }
-
-    None
-}
-
-// 判断一个 ID 是否可以作为分类或分组的父节点。
-fn parent_exists(data: &AppData, id: &str) -> bool {
-    data.categories.iter().any(|category| category.id == id)
-        || data
-            .categories
-            .iter()
-            .any(|category| find_group_in_items(&category.groups, id))
-}
-
-// 返回父节点所在的分组深度。
-//
-// 顶层分类返回 0，分类下的直接分组返回 1，以此类推；新增分组时
-// 会把新节点深度加 1，并据此执行最大层数校验。
-fn parent_depth(data: &AppData, id: &str) -> Option<usize> {
-    if data.categories.iter().any(|category| category.id == id) {
-        return Some(0);
-    }
-
-    data.categories
-        .iter()
-        .find_map(|category| find_group_depth(&category.groups, id, 1))
-}
-
-fn find_group_depth(items: &[Item], id: &str, depth: usize) -> Option<usize> {
-    for item in items {
-        match item {
-            Item::Group(group) if group.id == id => return Some(depth),
-            Item::Group(group) => {
-                if let Some(found) = find_group_depth(&group.children, id, depth + 1) {
-                    return Some(found);
-                }
-            }
-            Item::App(_) => {}
-        }
-    }
-
-    None
-}
-
-fn find_group_in_items(items: &[Item], id: &str) -> bool {
-    items.iter().any(|item| match item {
-        Item::Group(group) if group.id == id => true,
-        Item::Group(group) => find_group_in_items(&group.children, id),
-        Item::App(_) => false,
-    })
-}
-
-// 从树中递归删除指定种类的节点，并返回被删除的节点。
-fn remove_item_from_data(data: &mut AppData, id: &str, kind: ItemKind) -> Option<Item> {
-    for category in &mut data.categories {
-        if let Some(removed) = remove_item(&mut category.groups, id, kind) {
-            return Some(removed);
-        }
-    }
-
-    None
-}
-
-fn remove_item(items: &mut Vec<Item>, id: &str, kind: ItemKind) -> Option<Item> {
-    if let Some(index) = items.iter().position(|item| item_matches(item, id, kind)) {
-        return Some(items.remove(index));
-    }
-
-    for item in items.iter_mut() {
-        if let Item::Group(group) = item {
-            if let Some(removed) = remove_item(&mut group.children, id, kind) {
-                return Some(removed);
-            }
-        }
-    }
-
-    None
-}
-
-fn item_matches(item: &Item, id: &str, kind: ItemKind) -> bool {
-    match item {
-        Item::Group(group) => matches!(kind, ItemKind::Group) && group.id == id,
-        Item::App(app) => matches!(kind, ItemKind::App) && app.id == id,
     }
 }
 
 fn normalize_name(
-    name: String,
+    name: &str,
     error_code: &'static str,
     entity_name: &'static str,
 ) -> AppResult<String> {
@@ -505,9 +366,9 @@ fn normalize_name(
     Ok(normalized.to_owned())
 }
 
-fn choose_app_name(requested_name: Option<&str>, fallback: String) -> AppResult<String> {
+fn choose_app_name(requested_name: Option<&str>, fallback: &str) -> AppResult<String> {
     match requested_name {
-        Some(name) => normalize_name(name.to_owned(), "invalid_app_name", "应用"),
+        Some(name) => normalize_name(name, "invalid_app_name", "应用"),
         None => normalize_name(fallback, "invalid_app_name", "应用"),
     }
 }
@@ -529,10 +390,10 @@ enum Source {
 }
 
 impl Source {
-    fn as_string(&self) -> String {
+    fn into_string(self) -> String {
         match self {
             Self::LocalPath(path) => path.to_string_lossy().into_owned(),
-            Self::Url(url) => url.clone(),
+            Self::Url(url) => url,
         }
     }
 }
@@ -554,24 +415,27 @@ fn normalize_source(source: String) -> AppResult<Source> {
         ));
     }
 
-    if is_supported_url(normalized) {
+    if path::is_web_url(normalized) {
         return Ok(Source::Url(normalized.to_owned()));
     }
 
     Ok(Source::LocalPath(PathBuf::from(normalized)))
 }
 
-fn is_supported_url(value: &str) -> bool {
-    let Some((scheme, remainder)) = value.split_once("://") else {
-        return false;
-    };
-
-    !remainder.is_empty()
-        && !scheme.is_empty()
-        && scheme.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.')
-        })
-        && matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https")
+// 本地来源必须在创建节点前可读取；否则 Shell 可能仅凭扩展名返回一个
+// 图标，导致失效路径被误保存。URL 不经过这个校验。
+fn validate_local_source(source_path: &Path) -> AppResult<()> {
+    match std::fs::metadata(source_path) {
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(AppError::new(
+            "source_not_found",
+            format!("应用来源不存在: {}", source_path.display()),
+        )),
+        Err(error) => Err(AppError::new(
+            "source_access_failed",
+            format!("无法读取应用来源 {}: {error}", source_path.display()),
+        )),
+    }
 }
 
 fn default_url_name(url: &str) -> String {
@@ -583,34 +447,20 @@ fn default_url_name(url: &str) -> String {
         .to_owned()
 }
 
-fn is_shortcut_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("lnk"))
-}
-
 fn classify_source(path: &Path) -> IconType {
     if path.is_dir() {
         return IconType::Folder;
     }
 
-    match path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| extension.to_ascii_lowercase())
-        .as_deref()
-    {
-        Some("exe") => IconType::Executable,
-        _ => IconType::File,
+    if path::is_executable(path) {
+        IconType::Executable
+    } else {
+        IconType::File
     }
 }
 
 fn default_app_name(path: &Path) -> String {
-    path.file_stem()
-        .or_else(|| path.file_name())
-        .map(|name| name.to_string_lossy().into_owned())
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(|| "应用".to_owned())
+    path::display_name(path, "应用")
 }
 
 fn remove_cached_icon(path: Option<&Path>) {

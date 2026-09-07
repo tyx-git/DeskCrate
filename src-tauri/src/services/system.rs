@@ -2,11 +2,14 @@ use std::path::{Path, PathBuf};
 
 use crate::{
     error::AppResult,
-    models::{AppData, AppEXE, AppError, IconType, Item},
+    models::{AppEXE, AppError, IconType},
+    path,
     state::AppState,
     storage::DataRepository,
     system::{executor, shortcut},
 };
+
+use super::tree;
 
 // 系统操作业务服务。
 //
@@ -16,7 +19,7 @@ pub fn launch_app(state: &AppState, app_id: &str) -> AppResult<()> {
     let app = {
         let store = state.get_lock()?;
         let data = store.load_data()?;
-        find_app(&data, app_id)
+        tree::find_app(&data, app_id)
             .cloned()
             .ok_or_else(|| AppError::new("app_not_found", "找不到要启动的应用"))?
     };
@@ -30,7 +33,7 @@ pub fn launch_app(state: &AppState, app_id: &str) -> AppResult<()> {
 fn launch_app_record(app: &AppEXE) -> AppResult<()> {
     let launch_spec = build_launch_spec(app)?;
 
-    if is_script_path(Path::new(&app.source_path)) || is_script_path(&launch_spec.target_path) {
+    if path::is_script(Path::new(&app.source_path)) || path::is_script(&launch_spec.target_path) {
         return Err(AppError::new(
             "script_execution_not_allowed",
             "脚本启动需要经过白名单校验，当前版本暂不允许直接运行",
@@ -59,84 +62,31 @@ struct LaunchSpec {
 fn build_launch_spec(app: &AppEXE) -> AppResult<LaunchSpec> {
     let source_path = Path::new(&app.source_path);
     let is_shortcut =
-        matches!(&app.icon_type, &IconType::Shortcut) || is_shortcut_path(source_path);
+        matches!(&app.icon_type, &IconType::Shortcut) || path::is_shortcut(source_path);
 
     if is_shortcut {
         let shortcut = shortcut::parse_shortcut(source_path)?;
         return Ok(LaunchSpec {
             target_path: PathBuf::from(shortcut.target_path),
-            working_dir: shortcut
-                .working_dir
-                .filter(|value| !value.trim().is_empty())
-                .map(PathBuf::from),
-            arguments: shortcut.arguments.filter(|value| !value.trim().is_empty()),
+            working_dir: optional_path(shortcut.working_dir.as_deref()),
+            arguments: non_empty_text(shortcut.arguments.as_deref()),
         });
     }
 
     Ok(LaunchSpec {
         target_path: source_path.to_path_buf(),
-        working_dir: app
-            .working_dir
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .map(PathBuf::from),
-        arguments: app
-            .arguments
-            .as_deref()
-            .filter(|value| !value.trim().is_empty())
-            .map(str::to_owned),
+        working_dir: optional_path(app.working_dir.as_deref()),
+        arguments: non_empty_text(app.arguments.as_deref()),
     })
 }
 
-fn is_shortcut_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| extension.eq_ignore_ascii_case("lnk"))
+fn optional_path(value: Option<&str>) -> Option<PathBuf> {
+    non_empty_text(value).map(PathBuf::from)
 }
 
-// 当前版本的安全默认策略：脚本可以作为 `File` 保存，但不能直接启动。
-// 后续增加脚本白名单后，应在这里按白名单结果放行，而不是让底层 Shell
-// 根据文件关联自动决定是否执行。
-fn is_script_path(path: &Path) -> bool {
-    // URL 的最后一段可能恰好叫 `file.bat`，但它仍然应该交给浏览器；
-    // 只有本地文件路径才参与脚本扩展名判断。
-    if is_url_target(path) {
-        return false;
-    }
-
-    matches!(
-        path.extension()
-            .and_then(|extension| extension.to_str())
-            .map(|extension| extension.to_ascii_lowercase())
-            .as_deref(),
-        Some("bat") | Some("cmd") | Some("ps1") | Some("vbs") | Some("js")
-    )
-}
-
-fn is_url_target(path: &Path) -> bool {
-    let value = path.to_string_lossy();
-    value.contains("://") || value.to_ascii_lowercase().starts_with("mailto:")
-}
-
-// 在分类树中递归查找应用节点。
-fn find_app<'a>(data: &'a AppData, app_id: &str) -> Option<&'a AppEXE> {
-    if app_id.trim().is_empty() {
-        return None;
-    }
-
-    data.categories
-        .iter()
-        .flat_map(|category| category.groups.iter())
-        .find_map(|item| find_app_in_item(item, app_id))
-}
-
-fn find_app_in_item<'a>(item: &'a Item, app_id: &str) -> Option<&'a AppEXE> {
-    match item {
-        Item::App(app) if app.id == app_id => Some(app),
-        Item::App(_) => None,
-        Item::Group(group) => group
-            .children
-            .iter()
-            .find_map(|child| find_app_in_item(child, app_id)),
-    }
+fn non_empty_text(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
 }
