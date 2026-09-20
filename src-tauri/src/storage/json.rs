@@ -8,9 +8,10 @@ use std::{
 
 use super::{mutate_snapshot, DataRepository, SettingsRepository};
 use crate::{
-    error::AppResult,
-    models::{AppData, Settings},
+    error::{AppResult, JSON_PARSE_ERROR_CODE},
+    models::{AppData, AppError, Settings},
 };
+use chrono::Utc;
 use fs2::FileExt;
 use uuid::Uuid;
 
@@ -32,13 +33,17 @@ pub struct JsonStore {
 impl JsonStore {
     pub fn new(path: impl Into<PathBuf>) -> Self {
         let path = path.into();
-        let config_path = path.join("config/config.json");
-        let data_path = path.join("config/data.json");
+        // 逐段 join 而不是一次写 `"config/config.json"`：后者会把正斜杠原样留在
+        // 路径里，Windows 上虽然能用，但这个路径会出现在用户可见的报错里
+        // （"…\debug\config/data.json 不是合法的 JSON"），看着像是拼接错了。
+        let config_dir = path.join("config");
+        let config_path = config_dir.join("config.json");
+        let data_path = config_dir.join("data.json");
         let icons_path = path.join("icons");
         // 锁文件独立于 JSON 文件。原子替换会更换 JSON 文件本身，
         // 因此不能把锁绑定在会被替换的目标文件句柄上。
-        let config_lock_path = path.join("config/config.json.lock");
-        let data_lock_path = path.join("config/data.json.lock");
+        let config_lock_path = config_dir.join("config.json.lock");
+        let data_lock_path = config_dir.join("data.json.lock");
         Self {
             path,
             config_path,
@@ -105,11 +110,54 @@ impl JsonStore {
         })
     }
 
-    fn read_locked<T>(&self, file_path: &Path, lock_path: &Path) -> AppResult<T>
-    where
-        T: serde::de::DeserializeOwned,
-    {
-        self.with_file_lock(lock_path, || Self::read_json(file_path))
+    // 读取配置；内容损坏时备份原文件并按默认配置重建。
+    //
+    // 只有配置文件享受这个待遇，因为它的内容全部可以重新推导：窗口几何由当前
+    // 工作区算得出来，主题和视图模式都有默认值。用户手工改坏 config.json 之后，
+    // 应用会回到「首次启动」状态，而不是卡在一个既收不起来、尺寸也不对的半坏
+    // 状态 —— 文档里「手工改配置把窗口找回来」那条自救路径因此才真正成立。
+    //
+    // 必须同时覆盖「读」和「读改写」两条路径：收起/展开走的是
+    // `mutate_settings`，只修 `load_settings` 的话窗口照样收不起来。
+    fn read_settings_or_rebuild(&self) -> AppResult<Settings> {
+        match Self::read_json(&self.config_path) {
+            Ok(settings) => Ok(settings),
+            Err(error) if is_corrupt_json(&error) => {
+                let backup = quarantine(&self.config_path)?;
+                log::warn!(
+                    "配置文件内容已损坏，已备份为 {} 并按默认配置重建：{error}",
+                    backup.display()
+                );
+                let settings = Settings::default();
+                Self::write_json(&self.config_path, &settings)?;
+                Ok(settings)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    // 读取数据文件；内容损坏时**不重建**，只留一份副本并把错误说清楚。
+    //
+    // 与配置相反：data.json 是用户自己攒的分类和应用，静默换一份空的会看起来像
+    // 「数据全没了」，比报错严重得多。副本用**复制**而不是改名 —— 原文件必须留在
+    // 原位，是删掉还是修好由用户决定。
+    fn read_data_or_report(&self) -> AppResult<AppData> {
+        match Self::read_json(&self.data_path) {
+            Ok(data) => Ok(data),
+            Err(error) if is_corrupt_json(&error) => {
+                let backup = copy_aside(&self.data_path)?;
+                log::warn!(
+                    "数据文件内容已损坏，已复制副本到 {}：{error}",
+                    backup.display()
+                );
+                let message = format!(
+                    "{error}。已复制一份到 {}；请备份或修好原文件后重试",
+                    backup.display()
+                );
+                Err(AppError::new(error.code, message))
+            }
+            Err(error) => Err(error),
+        }
     }
 
     fn write_locked<T>(&self, file_path: &Path, lock_path: &Path, value: &T) -> AppResult<()>
@@ -119,31 +167,15 @@ impl JsonStore {
         self.with_file_lock(lock_path, || Self::write_json(file_path, value))
     }
 
-    fn mutate_locked<T, Operation, R>(
-        &self,
-        file_path: &Path,
-        lock_path: &Path,
-        operation: Operation,
-    ) -> AppResult<R>
-    where
-        T: serde::de::DeserializeOwned + serde::Serialize,
-        Operation: FnOnce(&mut T) -> AppResult<R>,
-    {
-        self.with_file_lock(lock_path, || {
-            mutate_snapshot(
-                || Self::read_json(file_path),
-                |value| Self::write_json(file_path, value),
-                operation,
-            )
-        })
-    }
-
     fn read_json<T>(path: &Path) -> AppResult<T>
     where
         T: serde::de::DeserializeOwned,
     {
-        let content = fs::read_to_string(path)?;
-        Ok(serde_json::from_str(&content)?)
+        // 路径必须进错误信息：这些错误会一路传到前端 toast，而 serde 的原始报错
+        // （"expected value at line 1 column 3"）不含文件名 —— 用户看到之后完全
+        // 不知道该去修哪个文件。
+        let content = fs::read_to_string(path).map_err(|error| with_path(error.into(), path))?;
+        serde_json::from_str(&content).map_err(|error| with_path(error.into(), path))
     }
     fn write_json<T>(path: &Path, value: &T) -> AppResult<()>
     where
@@ -152,6 +184,51 @@ impl JsonStore {
         let content = serde_json::to_string_pretty(value)?;
         atomic_write(path, content.as_bytes())
     }
+}
+
+// 把文件路径补进错误信息，保留原有错误码。
+fn with_path(error: AppError, path: &Path) -> AppError {
+    AppError::new(error.code, format!("{}：{}", path.display(), error.message))
+}
+
+// 判断一个错误是不是「文件内容不是合法 JSON」。
+//
+// 只有这一类失败可以安全地动用户的文件：内容已经坏了，备份或复制都不会损失什么。
+// IO 错误（被占用、权限不足）不走这条分支。
+fn is_corrupt_json(error: &AppError) -> bool {
+    error.code == JSON_PARSE_ERROR_CODE
+}
+
+// 把损坏的文件改名到一边，返回备份路径。
+//
+// 用改名而不是删除：用户的内容可能还有参考价值，而且原路径必须空出来给重建的
+// 默认值。时间戳用 `%Y%m%d-%H%M%S` 而不是 RFC 3339 —— 后者带冒号和加号，在
+// Windows 上不是合法文件名字符。重建之后文件就是合法的了，所以这个名字不会堆积。
+fn quarantine(path: &Path) -> AppResult<PathBuf> {
+    let backup = path.with_file_name(format!(
+        "{}.corrupt-{}",
+        file_name(path)?,
+        Utc::now().format("%Y%m%d-%H%M%S")
+    ));
+    fs::rename(path, &backup)?;
+    Ok(backup)
+}
+
+// 把损坏的文件复制一份（不改名），返回副本路径。
+//
+// 副本名固定而不带时间戳：原文件还在，每次启动都会再走一遍这条路径，带时间戳会让
+// 目录里堆满内容相同的副本。
+fn copy_aside(path: &Path) -> AppResult<PathBuf> {
+    let backup = path.with_file_name(format!("{}.corrupt", file_name(path)?));
+    fs::copy(path, &backup)?;
+    Ok(backup)
+}
+
+fn file_name(path: &Path) -> AppResult<String> {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_owned)
+        .ok_or_else(|| AppError::new("json_name_invalid", "JSON 文件名无效"))
 }
 
 // 跨进程文件锁的 RAII 封装。
@@ -325,7 +402,7 @@ fn wide_path(path: &Path) -> Vec<u16> {
 
 impl DataRepository for JsonStore {
     fn load_data(&self) -> AppResult<AppData> {
-        self.read_locked(&self.data_path, &self.data_lock_path)
+        self.with_file_lock(&self.data_lock_path, || self.read_data_or_report())
     }
     fn save_data(&self, value: &AppData) -> AppResult<()> {
         self.write_locked(&self.data_path, &self.data_lock_path, value)
@@ -337,13 +414,22 @@ impl DataRepository for JsonStore {
     {
         // 读取、业务修改和原子替换必须共享同一把跨进程锁；否则两个
         // 进程都基于旧快照修改时，后写入者会丢失前一个进程的更新。
-        self.mutate_locked(&self.data_path, &self.data_lock_path, operation)
+        //
+        // 读取走 `read_data_or_report` 而不是裸 `read_json`，这样数据文件损坏时
+        // 同样会先留下副本，并给出「哪个文件坏了、副本在哪」的可操作错误。
+        self.with_file_lock(&self.data_lock_path, || {
+            mutate_snapshot(
+                || self.read_data_or_report(),
+                |data| Self::write_json(&self.data_path, data),
+                operation,
+            )
+        })
     }
 }
 
 impl SettingsRepository for JsonStore {
     fn load_settings(&self) -> AppResult<Settings> {
-        self.read_locked(&self.config_path, &self.config_lock_path)
+        self.with_file_lock(&self.config_lock_path, || self.read_settings_or_rebuild())
     }
     fn save_settings(&self, settings: &Settings) -> AppResult<()> {
         self.write_locked(&self.config_path, &self.config_lock_path, settings)
@@ -353,6 +439,15 @@ impl SettingsRepository for JsonStore {
     where
         F: FnOnce(&mut Settings) -> AppResult<R>,
     {
-        self.mutate_locked(&self.config_path, &self.config_lock_path, operation)
+        // 与 `mutate_data` 同理，读取必须走带恢复的版本：收起/展开、保存几何、
+        // 补写用户尺寸都经由这条路径，只修 `load_settings` 的话配置一旦损坏，
+        // 窗口就再也收不起来了。
+        self.with_file_lock(&self.config_lock_path, || {
+            mutate_snapshot(
+                || self.read_settings_or_rebuild(),
+                |settings| Self::write_json(&self.config_path, settings),
+                operation,
+            )
+        })
     }
 }

@@ -99,19 +99,25 @@ pub fn find_group<'a>(data: &'a AppData, id: &str) -> Option<&'a Group> {
     })
 }
 
+// 顶层应用不在任何分类下，单独先看一遍；`find_item` 只走分类树，
+// 少这一步的话「放在顶层」的应用在测试里会表现为找不到。
 pub fn find_app<'a>(data: &'a AppData, id: &str) -> Option<&'a AppEXE> {
-    find_item(data, id).and_then(|item| match item {
-        Item::App(app) => Some(app),
-        Item::Group(_) => None,
+    data.apps.iter().find(|app| app.id == id).or_else(|| {
+        find_item(data, id).and_then(|item| match item {
+            Item::App(app) => Some(app),
+            Item::Group(_) => None,
+        })
     })
 }
 
 pub fn count_apps(data: &AppData) -> usize {
-    data.categories
-        .iter()
-        .flat_map(|category| category.groups.iter())
-        .map(count_apps_in_item)
-        .sum()
+    data.apps.len()
+        + data
+            .categories
+            .iter()
+            .flat_map(|category| category.groups.iter())
+            .map(count_apps_in_item)
+            .sum::<usize>()
 }
 
 fn count_apps_in_item(item: &Item) -> usize {

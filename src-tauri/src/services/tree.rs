@@ -49,6 +49,13 @@ pub(crate) enum NodeKind {
 }
 
 pub(crate) fn remove_node(data: &mut AppData, id: &str, kind: NodeKind) -> Option<Item> {
+    // 顶层应用也要能被删除，否则「放在顶层」的应用会变成删不掉的钉子。
+    if matches!(kind, NodeKind::App) {
+        if let Some(index) = data.apps.iter().position(|app| app.id == id) {
+            return Some(Item::App(data.apps.remove(index)));
+        }
+    }
+
     data.categories
         .iter_mut()
         .find_map(|category| remove_from_items(&mut category.groups, id, kind))
@@ -72,19 +79,25 @@ pub(crate) fn find_group_mut<'a>(data: &'a mut AppData, id: &str) -> Option<&'a 
     None
 }
 
-// 在所有分类中查找应用。
+// 在所有分类和顶层应用中查找应用。
 pub(crate) fn find_app<'a>(data: &'a AppData, id: &str) -> Option<&'a AppEXE> {
     if id.trim().is_empty() {
         return None;
     }
 
-    data.categories
-        .iter()
-        .find_map(|category| find_app_in_items(&category.groups, id))
+    data.apps.iter().find(|app| app.id == id).or_else(|| {
+        data.categories
+            .iter()
+            .find_map(|category| find_app_in_items(&category.groups, id))
+    })
 }
 
-// 在所有分类中查找可变应用。
+// 在所有分类和顶层应用中查找可变应用。
 pub(crate) fn find_app_mut<'a>(data: &'a mut AppData, id: &str) -> Option<&'a mut AppEXE> {
+    if let Some(app) = data.apps.iter_mut().find(|app| app.id == id) {
+        return Some(app);
+    }
+
     for category in &mut data.categories {
         if let Some(app) = find_app_in_items_mut(&mut category.groups, id) {
             return Some(app);

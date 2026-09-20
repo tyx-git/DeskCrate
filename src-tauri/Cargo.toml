@@ -33,9 +33,38 @@ windows = { version = "0.58", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Gdi",
     "Win32_System_Com",
+    # 抓取网址图标用的 HTTP 客户端。用系统自带的 WinHTTP 而不是引入
+    # reqwest：TLS 走 schannel、代理走系统配置，都不用额外依赖。
+    "Win32_Networking_WinHttp",
 ] }
 lnk = "0.3"
-image = { version = "0.25", features = ["png", "ico"] }
+# 只用来解码内联在 `<link rel=icon href="data:image/...;base64,...">` 里的图标。
+base64 = "0.22"
+# `ico` 是 exe/dll 的图标容器，`jpeg/gif/bmp/webp` 是网站图标常见的格式。
+image = { version = "0.25", features = [
+    "png",
+    "ico",
+    "jpeg",
+    "gif",
+    "bmp",
+    "webp",
+] }
 
 [dev-dependencies]
 tauri = { version = "2.11.3", default-features = false, features = ["test", "wry"] }
+
+[features]
+# 生产构建必须启用，否则前端资源不会被嵌进二进制。
+#
+# 判定链路：`tauri-macros/src/context.rs` 用
+# `dev: cfg!(not(feature = "custom-protocol"))` 决定 `generate_context!`
+# 是嵌入 `frontendDist` 还是留空；留空时窗口会去连 `devUrl`
+# （`http://localhost:5173/`）。所以漏了这个 feature 的 release 构建，
+# 在没有开发服务器的机器上打开就是一片空白 —— 且因为 GUI 进程没有控制台，
+# 现场没有任何可诊断的信息。
+#
+# 注意这是**非默认** feature：debug 构建需要保留 `devUrl` 才能配合 Vite 做热更新。
+# 生产构建用 `cargo build --release --features custom-protocol`；
+# 官方 `tauri build` 会自行注入 `tauri/custom-protocol`（依赖限定名），
+# 无需再声明本 feature，但本 feature 让「纯 cargo」路径也能构建出生产等价产物。
+custom-protocol = ["tauri/custom-protocol"]

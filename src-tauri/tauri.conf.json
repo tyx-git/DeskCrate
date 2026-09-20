@@ -12,20 +12,24 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "DeskCrate",
-        "width": 800,
-        "height": 600,
-        "resizable": true,
-        "fullscreen": false
+        "width": 360,
+        "height": 560,
+        "resizable": false,
+        "fullscreen": false,
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "shadow": false,
+        "visible": false
       }
     ],
     "security": {
       "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost https://ipc.localhost http://localhost:5173 ws://localhost:5173; img-src 'self' asset: http://asset.localhost https://asset.localhost data:;",
       "assetProtocol": {
-        "enable": true,
-        "scope": [
-          "$EXE/icons/**"
-        ]
+        "enable": true
       }
     }
   },

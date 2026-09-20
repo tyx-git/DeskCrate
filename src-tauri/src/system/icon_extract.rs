@@ -113,6 +113,20 @@ impl IconExtractor {
         self.save_image(app_id, image)
     }
 
+    // 直接保存一张已经准备好的图像。
+    //
+    // 网址图标走这条路：它不来自任何 Windows 图标句柄，而是下载下来解码好的
+    // 位图。存盘方式与提取出来的图标完全一致，因此后续清理和孤儿对账都不用
+    // 区分来源。
+    pub(crate) fn save_image(
+        &self,
+        app_id: &str,
+        image: RgbaImage,
+    ) -> AppResult<IconExtractionResult> {
+        validate_app_id(app_id)?;
+        self.write_image(app_id, image)
+    }
+
     fn save_placeholder_icon(
         &self,
         app_id: &str,
@@ -121,7 +135,7 @@ impl IconExtractor {
         self.save_image(app_id, placeholder_image(is_directory))
     }
 
-    fn save_image(&self, app_id: &str, image: RgbaImage) -> AppResult<IconExtractionResult> {
+    fn write_image(&self, app_id: &str, image: RgbaImage) -> AppResult<IconExtractionResult> {
         std::fs::create_dir_all(&self.icons_dir)?;
 
         let file_name = format!("{app_id}.png");

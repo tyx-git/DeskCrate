@@ -1,111 +1,290 @@
+@import 'tailwindcss';
+
+/* ============================================================================
+ * DeskCrate 设计令牌
+ *
+ * 数值来源：dosc/plan/展示页.html（展开态）与 dosc/plan/收起态.html（收起态），
+ * 以及 src-tauri/src/models/settings.rs 的 `css` 模块。改设计时三处需要同步。
+ *
+ * 关键换算：设计稿里的字号用「场景宽度的百分比」（vw）表达，而真实窗口只有
+ * 侧栏那么大。侧栏占场景宽度 18.75%，因此
+ *
+ *     1 场景 vw = 1 / 0.1875 = 5.3333 个「侧栏宽度百分比」（cqw）
+ *
+ * 这里统一改用容器查询单位 cqw，让字号跟随侧栏自身宽度等比缩放。好处是
+ * 浏览器预览和 Tauri 窗口内表现完全一致，不依赖窗口在屏幕上的绝对大小。
+ * ========================================================================== */
+@theme {
+  /* ---- 字号：括号内为设计稿原始值 ---- */
+  --text-cat: clamp(10px, 5.867cqw, 16px); /* 1.1vw 分类名 */
+  --text-cat-icon: clamp(11px, 5.333cqw, 16px); /* 1vw 分类图标 */
+  --text-caret: clamp(8px, 4.267cqw, 12px); /* 0.8vw 分类箭头 */
+  --text-group: clamp(9px, 4.8cqw, 14px); /* 0.9vw 分组名 */
+  --text-caret-sm: clamp(7px, 3.733cqw, 10px); /* 0.7vw 分组箭头 */
+  --text-chip: clamp(7px, 3.467cqw, 10px); /* 0.65vw 分组计数 */
+  --text-app: clamp(7px, 3.467cqw, 11px); /* 0.65vw 应用名 */
+  --text-field: clamp(9px, 4.533cqw, 13px); /* 0.85vw 搜索框 */
+  --text-glyph: clamp(14px, 9.6cqw, 28px); /* 1.8vw 图标兜底字形 */
+
+  /* ---- 尺寸：同样按侧栏宽度等比缩放 ---- */
+  --spacing-icon-item: clamp(36px, 21.333cqw, 64px); /* 4vw 图标项宽度 */
+  --spacing-icon-glyph: clamp(24px, 16cqw, 44px); /* 3vw 图标本体边长 */
+  --spacing-grid-gap: clamp(4px, 4.267cqw, 12px); /* 0.8vw 图标间距 */
+  --spacing-field-y: clamp(4px, 3.2cqw, 8px); /* 0.6vw 搜索框纵向内边距 */
+  --spacing-field-x: clamp(8px, 5.333cqw, 14px); /* 1vw 搜索框横向内边距 */
+
+  /* 窗口留白：与 Rust 侧 OVERLAY_SHADOW_GUTTER_PX / SIDEBAR_LEFT_PX 对齐 */
+  --spacing-gutter: 16px;
+  --spacing-edge: 2px;
+  /* 指示条尺寸：与 Rust 侧 COLLAPSED_STRIP_WIDTH/HEIGHT_PX 对齐，收束动画的目标
+     形状也是这个尺寸（见 .dc-stage--converged）。 */
+  --spacing-strip-w: 3px;
+  --spacing-strip-h: 80px;
+
+  /* ---- 色板：中性·柔白 ---- */
+  --color-panel: rgb(235 235 240 / 0.55); /* 侧栏玻璃底色 */
+  --color-ink: rgb(25 25 30 / 0.92); /* 分类名 */
+  --color-ink-soft: rgb(25 25 30 / 0.68); /* 分组名 */
+  --color-ink-mute: rgb(25 25 30 / 0.55); /* 应用名 */
+  --color-ink-faint: rgb(25 25 30 / 0.42); /* 搜索框占位符 */
+  --color-caret: rgb(0 0 0 / 0.3); /* 分类箭头 */
+  --color-caret-soft: rgb(0 0 0 / 0.22); /* 分组箭头 */
+  --color-hairline: rgb(0 0 0 / 0.04); /* 分类行下边框 / 分隔线 */
+  --color-hover: rgb(0 0 0 / 0.03); /* 悬停底色 */
+  --color-active: rgb(0 0 0 / 0.06); /* 选中底色 */
+  --color-chip: rgb(0 0 0 / 0.05); /* 分组计数底色 */
+  --color-chip-ink: rgb(0 0 0 / 0.4); /* 分组计数文字 */
+  --color-field: rgb(0 0 0 / 0.03); /* 搜索框底色 */
+  --color-field-line: rgb(0 0 0 / 0.05); /* 搜索框描边 */
+  --color-strip: rgb(255 255 255 / 0.6); /* 收起指示条 */
+  /* 以下为设计稿未覆盖、但交互必需的颜色 */
+  --color-sheet: rgb(250 250 252 / 0.92); /* 菜单与对话框底色 */
+  --color-danger: rgb(176 56 56); /* 删除类操作 */
+  --color-focus: rgb(58 96 190 / 0.5); /* 键盘焦点环 */
+
+  /* ---- 形状 ---- */
+  --radius-panel: 10px;
+  --radius-field: 10px;
+  --radius-chip: 3px;
+  --radius-strip: 1.5px;
+  --radius-sheet: 10px;
+
+  --blur-glass: 28px; /* 侧栏背景模糊 */
+  --blur-sheet: 20px; /* 菜单与对话框模糊 */
+
+  --shadow-panel:
+    4px 0 24px rgb(0 0 0 / 0.15), 1px 0 8px rgb(0 0 0 / 0.08),
+    inset 1px 1px 0 rgb(255 255 255 / 0.12);
+  --shadow-field: inset 0 1px 3px rgb(0 0 0 / 0.04);
+  --shadow-strip: 0 0 6px rgb(255 255 255 / 0.15);
+  --shadow-sheet:
+    0 12px 32px rgb(0 0 0 / 0.18), 0 2px 8px rgb(0 0 0 / 0.08);
+}
+
+/* 过渡的派生参数。`--dc-collapse-ms` / `--dc-expand-ms` 由 `SidebarShell`
+   内联下发，这里只推出内容错峰的时长 —— 面板本身的宽高共用一个 clip-path，
+   不需要再拆分成不同轴向的时长和延时。 */
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+  --dc-ease: cubic-bezier(0.33, 0, 0.2, 1);
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
+  /* 内容错峰的时长：只占收束全程的一半，末尾的项才不会来不及收。 */
+  --dc-converge-ms: calc(var(--dc-collapse-ms, 200ms) * 0.5);
+}
 
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
 
-  @media (max-width: 1024px) {
-    font-size: 16px;
+  /* 窗口是透明的悬浮层，页面本身不能有任何不透明底色。 */
+  body {
+    margin: 0;
+    background: transparent;
+    overflow: hidden;
+    font-family:
+      -apple-system, 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+    color: var(--color-ink);
+    -webkit-font-smoothing: antialiased;
+    /* 桌面启动器不需要文本选择和默认右键菜单。 */
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
+  }
+
+  /* 滚动条压到最细，避免遮挡玻璃面板的圆角与边缘高光。 */
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: rgb(0 0 0 / 0.16);
+    border-radius: 2px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  /* 键盘可达性：仅在键盘聚焦时显示焦点环，鼠标点击不显示。 */
+  :focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: -1px;
   }
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
-
-  #social .button-icon {
-    filter: invert(1) brightness(2);
-  }
+/* ---------------------------------------------------------------------------
+ * 悬浮窗留白
+ *
+ * 窗口比侧栏本体多留一圈透明像素，CSS 的 box-shadow 才不会被窗口边界裁掉。
+ * 展开态左侧保留设计稿的 2px 边距，收起态指示条贴左边缘（left: 0）。
+ * ------------------------------------------------------------------------- */
+.dc-window-expanded {
+  padding: var(--spacing-gutter) var(--spacing-gutter) var(--spacing-gutter)
+    var(--spacing-edge);
 }
 
-#root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
-  min-height: 100svh;
+.dc-window-collapsed {
+  padding: var(--spacing-gutter) var(--spacing-gutter) var(--spacing-gutter) 0;
+}
+
+/* 容器查询上下文。侧栏内部所有 cqw 字号都以这个盒子的宽度为基准，
+   所以它必须比使用 cqw 的元素高一层（元素不能查询自身）。 */
+.dc-container {
+  container-type: inline-size;
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.dc-scroll {
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+/* 图标网格：自动换行，间距由令牌控制。 */
+.dc-grid {
   display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: var(--spacing-grid-gap);
 }
 
-body {
-  margin: 0;
+/* 拖拽缩放把手期间：指针会跑出面板，光靠 `preventDefault` 挡不住后续开始的
+   文本选择，直接在 body 上关掉。 */
+body.dc-resizing {
+  user-select: none;
+  -webkit-user-select: none;
 }
 
-h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
+/* ---------------------------------------------------------------------------
+ * 收起 / 展开过渡：展开态「收束」成一条细丝
+ *
+ * 窗口是瞬间改尺寸的（`set_size` 一下就变成 19×112），所以动画必须在**窗口
+ * 还是大尺寸的时候**播完：`clip-path` 把可见区域同时向左侧 3px、向上方 80px
+ * 收，落点正好是收起态指示条的位置和大小，之后窗口一缩、指示条接管，视觉上
+ * 是连续的。
+ *
+ * 用 `clip-path` 而不是 `width/height`：前者只裁剪、不触发重排，60fps 下不会
+ * 因为每帧重排整个侧栏而掉帧，内容也天然被「挤掉」而不是被挤变形。
+ *
+ * **宽高必须同时变。** 曾经拆成两层、让横向先收纵向后收，实测观感是「先塌成
+ * 一条竖线、再缩到 80px」的两段式，很别扭 —— 面板是一整块，收就得整块一起收。
+ * 因此这里只有一层 clip-path，四个 inset 一起过渡，延时一律为 0。
+ *
+ * 时长由 JS 下发的 `--dc-collapse-ms` / `--dc-expand-ms` 决定，改那两个值即可
+ * 整体调速。
+ * ------------------------------------------------------------------------- */
+.dc-stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  /* 展开（无 --converged）时的目标状态，也是它的过渡参数。 */
+  clip-path: inset(0 0 0 0 round 10px);
+  background-color: transparent;
+  transition:
+    clip-path var(--dc-expand-ms) var(--dc-ease),
+    background-color var(--dc-expand-ms) linear;
 }
 
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
+.dc-stage--converged {
+  /* 收起时的目标状态：只剩左上角 3×80 一条，正好是收起态指示条的形状。 */
+  clip-path: inset(0 calc(100% - 3px) calc(100% - 80px) 0 round 1.5px);
+  /* 顺带把背景提亮到指示条的柔白，窗口缩小交给指示条时看不出换手。 */
+  background-color: rgb(255 255 255 / 0.6);
+  transition:
+    clip-path var(--dc-collapse-ms) var(--dc-ease),
+    background-color var(--dc-collapse-ms) linear;
+}
+
+/* 面板内容错峰左收：分类按顺序依次被「抽走」，最后只剩那条细丝。
+   延时封顶 80ms —— 分类多了后期项会拖到收束结束之后，窗口一缩就露馅。 */
+.dc-converge {
+  --dc-converge-delay: min(80ms, max(0ms, calc(var(--dc-i, 0) * 14ms)));
+
+  transition:
+    opacity var(--dc-converge-ms) var(--dc-ease),
+    transform var(--dc-converge-ms) var(--dc-ease);
+  transition-delay: var(--dc-converge-delay, 0ms);
+}
+
+.dc-stage--converged .dc-converge {
+  opacity: 0;
+  transform: translateX(-6%);
+}
+
+/* 收束时自上而下扫过的光带：像把面板里的光抽进那条细丝里。 */
+.dc-sweep {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 30%;
+  opacity: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    to bottom,
+    rgb(255 255 255 / 0) 0%,
+    rgb(255 255 255 / 0.5) 50%,
+    rgb(255 255 255 / 0) 100%
+  );
+  transform: translateY(-130%);
+}
+
+.dc-stage--converged .dc-sweep {
+  animation: dc-sweep-down var(--dc-collapse-ms) linear;
+}
+
+@keyframes dc-sweep-down {
+  0% {
+    transform: translateY(-130%);
+    opacity: 0;
+  }
+  30% {
+    opacity: 0.9;
+  }
+  100% {
+    transform: translateY(340%);
+    opacity: 0;
   }
 }
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
+
+/* 单行文本省略。 */
+.dc-ellipsis {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
   }
-}
-p {
-  margin: 0;
-}
-
-code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
-}
-
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
 }

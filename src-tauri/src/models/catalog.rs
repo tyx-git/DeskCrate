@@ -80,7 +80,12 @@ pub struct AddGroupRequest {
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AddAppRequest {
-    pub parent_id: String,   // 要放入的父分类或父分组 ID。
+    // 要放入的父分类或父分组 ID；`None` 表示直接放在顶层。
+    //
+    // 用 `Option` 而不是约定的哨兵字符串：顶层没有对应节点，任何哨兵值
+    // 都可能和真实 UUID 撞车或被人手写配置时误用，而「没有父节点」本来
+    // 就是这件事最准确的说法。
+    pub parent_id: Option<String>,
     pub source_path: String, // 原始路径或网址；快捷方式必须保留 .lnk 来源。
     #[serde(default)]
     pub name: Option<String>, // 可选的自定义展示名称；省略时由后端推导。
@@ -136,6 +141,16 @@ pub struct Group {
 pub struct AppData {
     pub version: i32,              // 数据格式版本
     pub categories: Vec<Category>, // 所有顶层分类
+    // 直接挂在顶层的应用。
+    //
+    // 分类只是「收纳方式」，不是必须的容器：常用的那几个程序应该能一步
+    // 放到侧栏最上面，不必为了放一个应用先建一个分类。顶层应用渲染在所
+    // 有分类之前。
+    //
+    // 带 `default`：旧版本的 `data.json` 里没有这个字段，缺了就当空数组，
+    // 因此不需要写数据迁移，老文件照常能读。
+    #[serde(default)]
+    pub apps: Vec<AppEXE>,
 }
 
 impl Default for AppData {
@@ -143,6 +158,7 @@ impl Default for AppData {
         Self {
             version: 1,
             categories: Vec::new(),
+            apps: Vec::new(),
         }
     }
 }

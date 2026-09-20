@@ -27,13 +27,16 @@ pub fn update_settings(state: &AppState, settings: Settings) -> AppResult<Settin
 }
 
 fn validate_settings(settings: &Settings) -> AppResult<()> {
+    // 缓存尺寸和用户尺寸覆盖都会在下次启动时被直接应用到窗口上，
+    // 0 宽或 0 高的窗口既看不见也点不到，两者用同一条规则校验。
+    //
+    // 两个值单位不同（物理像素 / 设计稿 CSS 像素），类型上刻意不能互换，
+    // 因此分别取字段再交给同一个校验函数，而不是塞进同一个数组。
     if let Some(size) = settings.window.size {
-        if size.width == 0 || size.height == 0 {
-            return Err(AppError::new(
-                "invalid_window_size",
-                "窗口宽度和高度必须大于 0",
-            ));
-        }
+        validate_size("窗口大小", size.width, size.height)?;
+    }
+    if let Some(size) = settings.window.size_override {
+        validate_size("用户尺寸覆盖", size.width, size.height)?;
     }
 
     // `is_initialized` 与几何信息必须成套存在。否则下次启动会进入
@@ -52,6 +55,21 @@ fn validate_settings(settings: &Settings) -> AppResult<()> {
                 "已初始化配置必须包含窗口大小",
             ));
         }
+    }
+
+    Ok(())
+}
+
+// 尺寸字段的形状校验：宽高都必须大于 0。
+//
+// 两个尺寸字段的单位不同（物理像素 / 设计稿 CSS 像素），但「不能是 0」这条
+// 规则与单位无关，因此只接收分量、不接收具体类型。
+fn validate_size(label: &str, width: u32, height: u32) -> AppResult<()> {
+    if width == 0 || height == 0 {
+        return Err(AppError::new(
+            "invalid_window_size",
+            format!("{label}的宽度和高度必须大于 0"),
+        ));
     }
 
     Ok(())

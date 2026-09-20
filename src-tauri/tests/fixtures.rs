@@ -25,7 +25,7 @@ fn fixture_directory_can_be_used_as_a_real_folder_application_source() {
     let app = catalog::add_app(
         &state,
         AddAppRequest {
-            parent_id: category.id,
+            parent_id: Some(category.id),
             source_path: source.to_string_lossy().into_owned(),
             name: None,
         },

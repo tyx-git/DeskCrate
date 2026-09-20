@@ -1,0 +1,87 @@
+import { create } from 'zustand'
+
+import type { NodeLocation } from '../lib/tree'
+
+/** 对话框种类。每种对应一组字段和一个提交动作。 */
+export type DialogKind = 'new-category' | 'new-group' | 'add-app' | 'rename' | 'confirm'
+
+export interface DialogState {
+  kind: DialogKind
+  /** 操作目标节点的 ID；新建分类时为空。 */
+  targetId?: string
+  /** 操作目标节点的展示名称，用于对话框标题。 */
+  targetName?: string
+  /** 输入框初始值。 */
+  initialValue?: string
+  /** `confirm` 类型对话框的正文。 */
+  message?: string
+  /** `confirm` 类型对话框的确认按钮文案。 */
+  confirmLabel?: string
+  /** `confirm` 类型对话框点确认后执行的动作。 */
+  onConfirm?: () => void
+}
+
+export interface ContextMenuState {
+  /** 相对于窗口客户区的坐标。 */
+  x: number
+  y: number
+  /** 右键命中的节点；在空白处右键时为 null，表示「新建分类」。 */
+  target: NodeLocation | null
+}
+
+export interface Notice {
+  id: number
+  kind: 'error' | 'info'
+  message: string
+}
+
+interface UiState {
+  /** 搜索关键词。 */
+  query: string
+  /** 键盘导航当前选中的应用 ID。 */
+  selectedAppId: string | null
+  contextMenu: ContextMenuState | null
+  dialog: DialogState | null
+  notice: Notice | null
+
+  setQuery: (query: string) => void
+  setSelectedAppId: (id: string | null) => void
+  openContextMenu: (menu: ContextMenuState) => void
+  closeContextMenu: () => void
+  openDialog: (dialog: DialogState) => void
+  closeDialog: () => void
+  notify: (kind: Notice['kind'], message: string) => void
+  dismissNotice: () => void
+}
+
+let noticeSeq = 0
+let noticeTimer: number | undefined
+
+export const useUiStore = create<UiState>((set) => ({
+  query: '',
+  selectedAppId: null,
+  contextMenu: null,
+  dialog: null,
+  notice: null,
+
+  setQuery: (query) => set({ query, selectedAppId: null }),
+  setSelectedAppId: (selectedAppId) => set({ selectedAppId }),
+  openContextMenu: (contextMenu) => set({ contextMenu, dialog: null }),
+  closeContextMenu: () => set({ contextMenu: null }),
+  openDialog: (dialog) => set({ dialog, contextMenu: null }),
+
+  closeDialog: () => set({ dialog: null }),
+
+  notify: (kind, message) => {
+    // 后到的提示覆盖前一条，避免错误堆叠把侧栏顶出可视区。
+    window.clearTimeout(noticeTimer)
+    const notice: Notice = { id: (noticeSeq += 1), kind, message }
+    set({ notice })
+    noticeTimer = window.setTimeout(() => set({ notice: null }), 6000)
+  },
+
+  dismissNotice: () => {
+    window.clearTimeout(noticeTimer)
+    set({ notice: null })
+  },
+}))

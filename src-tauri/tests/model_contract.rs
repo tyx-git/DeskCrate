@@ -34,9 +34,12 @@ fn catalog_serializes_with_frontend_names_and_without_legacy_fields() {
             })],
             created_time: "2026-08-31T00:00:00Z".to_owned(),
         }],
+        apps: Vec::new(),
     };
 
     let json = serde_json::to_value(&data).expect("catalog should serialize");
+    // 顶层应用是根节点上的独立数组，前端按 `data.apps` 取用。
+    assert_eq!(json["apps"], serde_json::json!([]));
     let category = &json["categories"][0];
     let group = &category["groups"][0]["Group"];
     let app = &group["children"][0]["App"];

@@ -4,6 +4,7 @@ use crate::{
     error::AppResult,
     models::{IconExtractionResult, ParsedShortcut},
     path,
+    services::favicon,
     storage::JsonStore,
     system::{icon_extract::IconExtractor, shortcut},
 };
@@ -13,7 +14,7 @@ use crate::{
 // 该服务只负责业务流程：
 //
 // - 解析快捷方式；
-// - 判断实际图标来源；
+// - 判断实际图标来源（本地文件、快捷方式、网址站点图标）；
 // - 把图标提取器返回的结果交给调用方；
 // - 约定图标缓存目录和前端资源 URL。
 //
@@ -75,6 +76,27 @@ impl IconService {
         }
 
         self.extractor.extract_associated(source_path, app_id)
+    }
+
+    // 抓取网址的站点图标并缓存。
+    //
+    // 失败不抛给调用方：抓不到图标只是少了张图，网址应用本身照样能加进来，
+    // 届时由 `prepare_app` 退回内置图标。这里记一条 debug 日志，方便排查
+    // 「为什么这个站点没图标」。
+    pub(crate) fn fetch_url_icon(&self, url: &str, app_id: &str) -> Option<IconExtractionResult> {
+        match favicon::fetch_icon(url) {
+            Ok(image) => match self.extractor.save_image(app_id, image) {
+                Ok(result) => Some(result),
+                Err(error) => {
+                    log::debug!("保存 {} 的网址图标失败: {}", url, error.message);
+                    None
+                }
+            },
+            Err(error) => {
+                log::debug!("抓取 {} 的网址图标失败: {}", url, error.message);
+                None
+            }
+        }
     }
 
     // 根据已解析的快捷方式提取图标。

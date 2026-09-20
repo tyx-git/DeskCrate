@@ -49,7 +49,8 @@ fn create_test_app(directory: &TestDir) -> tauri::App<tauri::test::MockRuntime> 
             commands::settings::get_settings,
             commands::settings::update_settings,
             commands::system::launch_icon,
-            commands::window::is_init
+            commands::window::is_init,
+            commands::window::apply_view_mode
         ])
         .build(mock_context(noop_assets()))
         .expect("mock Tauri app should build")

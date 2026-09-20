@@ -64,9 +64,11 @@ pub fn delete_group(id: String, state: tauri::State<'_, AppState>) -> AppResult<
 }
 
 // 添加应用或快捷方式；图标和快捷方式字段由服务层自动解析。
+//
+// `parent_id` 传 `null` 表示直接放到顶层，不进任何分类。
 #[tauri::command]
 pub fn add_app(
-    parent_id: String,
+    parent_id: Option<String>,
     source_path: String,
     name: Option<String>,
     state: tauri::State<'_, AppState>,

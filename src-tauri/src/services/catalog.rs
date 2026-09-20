@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
@@ -160,7 +161,10 @@ pub fn delete_group(state: &AppState, request: DeleteRequest) -> AppResult<()> {
 // 这样图标处理不会长时间阻塞其他目录操作，也不会让 `MutexGuard`
 // 跨越未来可能加入的异步边界。
 pub fn add_app(state: &AppState, request: AddAppRequest) -> AppResult<AppEXE> {
-    validate_id(&request.parent_id)?;
+    // `parent_id` 为 `None` 表示放到顶层，此时没有父节点需要校验。
+    if let Some(parent_id) = &request.parent_id {
+        validate_id(parent_id)?;
+    }
     let source = normalize_source(request.source_path)?;
     if let Source::LocalPath(source_path) = &source {
         validate_local_source(source_path)?;
@@ -171,12 +175,10 @@ pub fn add_app(state: &AppState, request: AddAppRequest) -> AppResult<AppEXE> {
     let icon_service = {
         let store = state.get_lock()?;
         let data = store.load_data()?;
-        if !tree::parent_exists(&data, &request.parent_id) {
-            return Err(not_found(
-                "parent_not_found",
-                "应用的父节点",
-                &request.parent_id,
-            ));
+        if let Some(parent_id) = &request.parent_id {
+            if !tree::parent_exists(&data, parent_id) {
+                return Err(not_found("parent_not_found", "应用的父节点", parent_id));
+            }
         }
         IconService::from_store(&store)
     };
@@ -210,12 +212,15 @@ pub fn add_app(state: &AppState, request: AddAppRequest) -> AppResult<AppEXE> {
         }
     };
     if let Err(error) = store.mutate_data(|data| {
-        append_item(
-            data,
-            &request.parent_id,
-            Item::App(app.clone()),
-            "应用的父节点",
-        )
+        // 顶层应用没有父容器，直接挂在根节点的 `apps` 上；其余情况沿用
+        // 「按 parent_id 找到分类或分组再挂进去」的既有路径。
+        match &request.parent_id {
+            Some(parent_id) => append_item(data, parent_id, Item::App(app.clone()), "应用的父节点"),
+            None => {
+                data.apps.push(app.clone());
+                Ok(())
+            }
+        }
     }) {
         drop(store);
         remove_cached_icon(cache_path.as_deref());
@@ -306,14 +311,23 @@ fn prepare_app(
     match source {
         Source::Url(url) => {
             let fallback = default_url_name(url);
+            // 先试着把站点的 favicon 抓下来，抓到就和本地程序一样有个真实图标。
+            // 抓不到（站点没图标、离线、超时）不影响添加，退回内置的地球图标。
+            let (icon_url, cache_path) = match icon_service.fetch_url_icon(url, app_id) {
+                Some(result) => (
+                    IconService::asset_url(&result.cache_path),
+                    Some(result.cache_path),
+                ),
+                None => (DEFAULT_URL_ICON_URL.to_owned(), None),
+            };
+
             Ok(PreparedApp {
                 name: choose_app_name(requested_name, &fallback)?,
                 working_dir: None,
                 arguments: None,
                 icon_type: IconType::Url,
-                // URL 没有本地文件图标，使用 service 层提供的内置 SVG data URL。
-                icon_url: DEFAULT_URL_ICON_URL.to_owned(),
-                cache_path: None,
+                icon_url,
+                cache_path,
             })
         }
         Source::LocalPath(source_path) if path::is_shortcut(source_path) => {
@@ -487,7 +501,16 @@ fn cleanup_item_icons(item: &Item, icons_dir: &Path) {
             // `icon_url` 是给 WebView 使用的 URL，可能已经把磁盘路径
             // percent-encode，不能把它当作本地 Path 解析。缓存文件名
             // 由后端按 app.id 生成，因此这里直接使用受信任的 ID。
-            let _ = std::fs::remove_file(icons_dir.join(expected_name));
+            let path = icons_dir.join(expected_name);
+
+            // 删除失败不能静默吞掉：Windows 上文件被其他进程占用时删除会失败，
+            // 留下的孤儿只能靠 `sweep_orphan_icons` 兜底，这里至少留下线索。
+            // `NotFound` 属于正常情况（URL 应用本来就没有图标文件），不算失败。
+            if let Err(error) = std::fs::remove_file(&path) {
+                if error.kind() != std::io::ErrorKind::NotFound {
+                    log::warn!("清理图标缓存失败 {}: {error}", path.display());
+                }
+            }
         }
         Item::Group(group) => {
             for child in &group.children {
@@ -495,6 +518,95 @@ fn cleanup_item_icons(item: &Item, icons_dir: &Path) {
             }
         }
     }
+}
+
+// 启动时对账图标缓存，删除不再被任何应用引用的 `{UUID}.png`。
+//
+// 正常路径下删除应用/分组/分类都会同步清掉图标，所以这个对账只兜异常情况：
+// 进程在「写完 PNG」和「提交 data.json」之间崩溃、或删除时文件被占用而失败。
+// 这类孤儿没有任何界面能反映出来，不对账就会一直堆积。
+//
+// 只处理严格符合 `{UUID}.png` 的文件 —— 图标文件名由后端按 app.id 生成，
+// 不符合这个形状的文件不是本程序写的，一律不动，避免误删用户自己的东西。
+//
+// 返回被删除的文件名（如 `{uuid}.png`），供调用方记录日志。
+pub fn sweep_orphan_icons(state: &AppState) -> AppResult<Vec<String>> {
+    let (referenced, icons_dir) = {
+        let store = state.get_lock()?;
+        let data = store.load_data()?;
+        (collect_app_ids(&data), store.icons_path().to_path_buf())
+    };
+
+    let entries = match std::fs::read_dir(&icons_dir) {
+        Ok(entries) => entries,
+        // 图标目录尚未建立时不可能有孤儿。
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(AppError::new(
+                "icon_dir_unreadable",
+                format!("无法读取图标目录 {}: {error}", icons_dir.display()),
+            ))
+        }
+    };
+
+    let mut removed = Vec::new();
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+
+        if path.extension().and_then(|extension| extension.to_str()) != Some("png") {
+            continue;
+        }
+
+        let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+            continue;
+        };
+
+        if !is_uuid(stem) || referenced.contains(stem) {
+            continue;
+        }
+
+        match std::fs::remove_file(&path) {
+            Ok(()) => removed.push(file_name.to_owned()),
+            Err(error) => log::warn!("删除孤儿图标失败 {}: {error}", path.display()),
+        }
+    }
+
+    removed.sort();
+    Ok(removed)
+}
+
+// 收集数据树中所有应用的 ID，作为图标缓存的引用集合。
+//
+// 顶层应用也要算进去：漏了它们，孤儿对账会把这些图标当成没人引用的垃圾删掉。
+fn collect_app_ids(data: &AppData) -> HashSet<String> {
+    fn walk(items: &[Item], ids: &mut HashSet<String>) {
+        for item in items {
+            match item {
+                Item::App(app) => {
+                    ids.insert(app.id.clone());
+                }
+                Item::Group(group) => walk(&group.children, ids),
+            }
+        }
+    }
+
+    let mut ids: HashSet<String> = data.apps.iter().map(|app| app.id.clone()).collect();
+    for category in &data.categories {
+        walk(&category.groups, &mut ids);
+    }
+    ids
+}
+
+// 判断文件名主干是否是标准连字符形式的 UUID（8-4-4-4-12，共 36 字符）。
+//
+// `Uuid::parse_str` 还接受 32 位简单形式和带花括号形式，所以额外卡住长度，
+// 确保只命中后端自己生成的那种命名。
+fn is_uuid(stem: &str) -> bool {
+    stem.len() == 36 && Uuid::parse_str(stem).is_ok()
 }
 
 fn not_found(code: &'static str, entity_name: &str, id: &str) -> AppError {
