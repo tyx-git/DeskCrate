@@ -8,7 +8,7 @@ use crate::{
     error::AppResult,
     models::{
         AddAppRequest, AddCategoryRequest, AddGroupRequest, AppData, AppEXE, AppError, Category,
-        DeleteRequest, Group, IconType, Item, RenameRequest, RootItem,
+        DeleteRequest, Group, IconType, Item, MoveAppRequest, RenameRequest, RootItem,
     },
     path,
     state::AppState,
@@ -229,6 +229,63 @@ pub fn add_app(state: &AppState, request: AddAppRequest) -> AppResult<AppEXE> {
     }
 
     Ok(app)
+}
+
+// 把一个应用移动到新位置（拖拽换位）。
+//
+// 分两步：先从原位置摘下来，再按目标插回去。顺序不能反 —— 先插再摘会让应用在
+// 两个地方同时存在，而 `remove_node` 只删它找到的第一个。
+//
+// 目标用「参照节点 + 插到它之前」表达，因此**先摘后插不会错位**：参照节点在被
+// 摘掉自己之后仍然指向同一个元素。
+pub fn move_app(state: &AppState, request: MoveAppRequest) -> AppResult<()> {
+    let store = state.get_lock()?;
+    store.mutate_data(|data| {
+        let Some(Item::App(app)) = tree::remove_node(data, &request.id, tree::NodeKind::App) else {
+            return Err(not_found("app_not_found", "应用", &request.id));
+        };
+
+        let before_id = request.before_id.as_deref();
+
+        match &request.parent_id {
+            None => match before_id {
+                // 参照的是某个顶层应用 → 插进它所在的那一行的对应位置。
+                Some(reference) => {
+                    if tree::insert_into_root_row(data, reference, app) {
+                        return Ok(());
+                    }
+                    Err(AppError::new(
+                        "reference_not_found",
+                        format!("找不到参照节点: {reference}"),
+                    ))
+                }
+                None => {
+                    tree::append_to_root(data, app);
+                    Ok(())
+                }
+            },
+
+            Some(parent_id) => match before_id {
+                Some(reference) => {
+                    if tree::insert_before_in_container(data, reference, app) {
+                        Ok(())
+                    } else {
+                        Err(AppError::new(
+                            "reference_not_found",
+                            format!("找不到参照节点: {reference}"),
+                        ))
+                    }
+                }
+                None => {
+                    if tree::append_to_container(data, parent_id, app) {
+                        Ok(())
+                    } else {
+                        Err(not_found("parent_not_found", "目标容器", parent_id))
+                    }
+                }
+            },
+        }
+    })
 }
 
 // 按 UUID 重命名应用。

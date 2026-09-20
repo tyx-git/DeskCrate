@@ -38,9 +38,11 @@ export function Row({
 }: RowProps) {
   const isCategory = depth === 0
 
+  // 子分类**不改字体**，只靠缩进体现层级：字号、字重、颜色都与分类行一致，
+  // 唯一的区别是没有下边框（那是分类行专属的分隔）。
   const sizing = isCategory
     ? 'gap-[2.2cqw] px-[5%] py-[2%] text-cat font-semibold text-ink border-b border-hairline'
-    : 'gap-[1.6cqw] px-[5%] py-[1.2%] text-group text-ink-soft'
+    : 'gap-[1.6cqw] px-[5%] py-[1.2%] text-cat font-semibold text-ink'
 
   const dropClass = isDropTarget ? 'bg-[rgb(58_96_190_/_0.14)] ring-1 ring-inset ring-focus' : ''
 

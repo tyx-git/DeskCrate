@@ -276,6 +276,42 @@ body.dc-resizing {
   }
 }
 
+/* ---------------------------------------------------------------------------
+ * 应用图标的拖拽换位
+ *
+ * 落点提示画在被瞄准图标的**边缘**（一条竖线），而不是整块高亮 —— 整块高亮会
+ * 让人分不清是「要选中它」还是「要插到它旁边」。颜色与根节点之间的插入分界线
+ * 一致，保持同一套视觉语言。
+ * ------------------------------------------------------------------------- */
+.dc-app-icon.dc-drop-before::before,
+.dc-app-icon.dc-drop-after::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  border-radius: 1px;
+  background-color: var(--color-drop-active);
+}
+
+.dc-app-icon.dc-drop-before::before {
+  left: -4px;
+}
+.dc-app-icon.dc-drop-after::after {
+  right: -4px;
+}
+
+/* 拖拽期间给分类行一个可放置的底色，明确「松手会进这个分类」。 */
+.dc-drop-zone {
+  background-color: rgb(58 96 190 / 0.08);
+}
+
+/* 换位后的重排动画由 Web Animations API 驱动（见 useReorderAnimation），
+   这里只保证图标本身有 transform 可动画。 */
+.dc-app-icon {
+  will-change: transform;
+}
+
 /* 单行文本省略。 */
 .dc-ellipsis {
   white-space: nowrap;

@@ -3,7 +3,7 @@ pub mod settings;
 pub mod system;
 pub use catalog::{
     AddAppRequest, AddCategoryRequest, AddGroupRequest, AppData, AppEXE, AppError, Category,
-    DeleteRequest, Group, IconType, Item, RenameRequest, RootItem,
+    DeleteRequest, Group, IconType, Item, MoveAppRequest, RenameRequest, RootItem,
 };
 pub use settings::{
     CssSize, ResizeWindowRequest, Settings, Theme, ViewMode, WindowPosition, WindowSettings,

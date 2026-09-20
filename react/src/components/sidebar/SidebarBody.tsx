@@ -1,6 +1,7 @@
 import { Fragment } from 'react'
 
 import { describeError } from '../../api'
+import { useReorderAnimation } from '../../hooks/useReorderAnimation'
 import { asAppsRoot, asCategoryRoot } from '../../lib/tree'
 import { useCatalogStore } from '../../state/catalogStore'
 import { useFilteredData } from '../../state/selectors'
@@ -35,6 +36,17 @@ export function SidebarBody({ activeDropIndex, isDragging }: SidebarBodyProps) {
   const load = useCatalogStore((state) => state.load)
   const query = useUiStore((state) => state.query)
   const filtered = useFilteredData()
+
+  // 根节点顺序 + 每个容器内的顺序拼成一个签名，顺序一变就播重排动画。
+  const orderSignature = JSON.stringify(
+    filtered.items.map((item) => {
+      const apps = asAppsRoot(item)
+      if (apps) return apps.map((app) => app.id)
+      const category = asCategoryRoot(item)
+      return category ? [category.id] : []
+    }),
+  )
+  useReorderAnimation(orderSignature)
 
   const total = filtered.items.length
 

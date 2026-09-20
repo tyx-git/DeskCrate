@@ -65,6 +65,29 @@ pub struct DeleteRequest {
     pub id: String, // 要删除的节点 ID。
 }
 
+// 移动一个应用到新位置时由前端提交的请求数据。
+//
+// 拖拽改位置是「先摘下来、再插回去」两步，所以请求里只描述**目标**（父容器与
+// 下标），源位置由后端自己查 —— 前端不必维护一份位置索引，也就不会和落盘结果
+// 对不上。
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveAppRequest {
+    pub id: String, // 要移动的应用 ID。
+
+    // 目标父容器：分类 ID、分组 ID，`null` 表示顶层。
+    //
+    // 与 `AddAppRequest.parent_id` 同一套语义：`Option` 而不是哨兵字符串。
+    pub parent_id: Option<String>,
+
+    // 参照节点：插到它**之前**。`null` 表示插到目标容器的末尾。
+    //
+    // 为什么用「参照节点」而不是下标：顶层应用是按**行**存放的，一个下标表达不了
+    // 「第几行的第几个」。而且摘掉自己会让后续元素的下标整体左移，前端很容易算
+    // 偏一位。以某个具体应用为参照则没有这些歧义。
+    pub before_id: Option<String>,
+}
+
 // 新增子分组时由前端提交的请求数据。
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

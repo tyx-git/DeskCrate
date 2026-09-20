@@ -41,6 +41,17 @@ export interface Backend {
     name?: string,
     rootIndex?: number,
   ): Promise<AppEXE>
+  /**
+   * 把一个应用移动到新位置（拖拽换位）。
+   *
+   * `parentId` 为 `null` 表示移到顶层；`beforeId` 是参照节点（插到它之前），
+   * `null` 表示插到目标容器末尾。
+   */
+  moveApp(
+    id: string,
+    parentId: string | null,
+    beforeId: string | null,
+  ): Promise<void>
   renameApp(id: string, name: string): Promise<AppEXE>
   deleteApp(id: string): Promise<void>
   launchIcon(id: string): Promise<void>

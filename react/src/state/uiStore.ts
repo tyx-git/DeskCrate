@@ -35,6 +35,12 @@ export interface Notice {
   message: string
 }
 
+/** 拖拽应用时的落点提示：放在哪个图标的前面 / 后面。 */
+export interface DropHint {
+  appId: string
+  position: 'before' | 'after'
+}
+
 interface UiState {
   /** 搜索关键词。 */
   query: string
@@ -44,6 +50,11 @@ interface UiState {
   dialog: DialogState | null
   notice: Notice | null
 
+  /** 正在被拖拽的应用 ID；没有拖拽时为 null。 */
+  draggingAppId: string | null
+  /** 当前悬停的落点。 */
+  dropHint: DropHint | null
+
   setQuery: (query: string) => void
   setSelectedAppId: (id: string | null) => void
   openContextMenu: (menu: ContextMenuState) => void
@@ -52,6 +63,8 @@ interface UiState {
   closeDialog: () => void
   notify: (kind: Notice['kind'], message: string) => void
   dismissNotice: () => void
+  setDraggingApp: (id: string | null) => void
+  setDropHint: (hint: DropHint | null) => void
 }
 
 let noticeSeq = 0
@@ -63,6 +76,8 @@ export const useUiStore = create<UiState>((set) => ({
   contextMenu: null,
   dialog: null,
   notice: null,
+  draggingAppId: null,
+  dropHint: null,
 
   setQuery: (query) => set({ query, selectedAppId: null }),
   setSelectedAppId: (selectedAppId) => set({ selectedAppId }),
@@ -84,4 +99,7 @@ export const useUiStore = create<UiState>((set) => ({
     window.clearTimeout(noticeTimer)
     set({ notice: null })
   },
+
+  setDraggingApp: (draggingAppId) => set({ draggingAppId, dropHint: null }),
+  setDropHint: (dropHint) => set({ dropHint }),
 }))

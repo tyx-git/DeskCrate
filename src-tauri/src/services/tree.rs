@@ -1,7 +1,6 @@
 use crate::models::{AppData, AppEXE, Category, Group, Item, RootItem};
 
 // 目录树查询的内部实现。
-//
 // 分类服务和系统服务都需要在同一棵树中查找节点；把遍历集中在这里，
 // 可以避免各服务分别维护一套递归逻辑，且不把树操作细节暴露给前端。
 
@@ -18,11 +17,81 @@ pub(crate) fn find_category_mut<'a>(data: &'a mut AppData, id: &str) -> Option<&
     })
 }
 
+// 在顶层某一行应用里，插到参照应用之前。
+pub(crate) fn insert_into_root_row(data: &mut AppData, before_id: &str, app: AppEXE) -> bool {
+    for item in data.items.iter_mut() {
+        if let RootItem::Apps(apps) = item {
+            if let Some(position) = apps.iter().position(|one| one.id == before_id) {
+                apps.insert(position, app);
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+// 在分类或分组内部，插到参照节点之前。
+// 分组可以嵌套（最深 4 层），所以这里递归地找**直接持有**参照节点的那一层再插 ——
+// 参照节点在哪个分组里，就插进哪个分组，而不是一律塞到分类的顶层。
+pub(crate) fn insert_before_in_container(data: &mut AppData, before_id: &str, app: AppEXE) -> bool {
+    for item in data.items.iter_mut() {
+        if let RootItem::Category(category) = item {
+            if insert_before_recursive(&mut category.groups, before_id, app.clone()) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn insert_before_recursive(items: &mut Vec<Item>, before_id: &str, app: AppEXE) -> bool {
+    if let Some(position) = items
+        .iter()
+        .position(|item| matches!(item, Item::App(one) if one.id == before_id))
+    {
+        items.insert(position, Item::App(app));
+        return true;
+    }
+
+    for item in items.iter_mut() {
+        if let Item::Group(group) = item {
+            if insert_before_recursive(&mut group.children, before_id, app.clone()) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+// 追加到分类或分组的末尾。
+pub(crate) fn append_to_container(data: &mut AppData, parent_id: &str, app: AppEXE) -> bool {
+    if let Some(category) = find_category_mut(data, parent_id) {
+        category.groups.push(Item::App(app));
+        return true;
+    }
+
+    if let Some(group) = find_group_mut(data, parent_id) {
+        group.children.push(Item::App(app));
+        return true;
+    }
+
+    false
+}
+
+// 追加到顶层末尾：末行是应用行就并入，否则新起一行。
+pub(crate) fn append_to_root(data: &mut AppData, app: AppEXE) {
+    match data.items.last_mut() {
+        Some(RootItem::Apps(apps)) => apps.push(app),
+        _ => data.items.push(RootItem::Apps(vec![app])),
+    }
+}
+
 // 把一个顶层应用插到第 `index` 个根节点**之前**。
-//
 // 合并规则：优先并入落点处的那一行应用（`items[index]`），其次并入紧邻上方的
 // 那一行（`items[index - 1]`），都没有才新起一行。
-//
 // 并入而不是每次都新起一行，是因为「一行可以放多个顶层应用」—— 拖到某一行
 // 的下边缘，直觉上就是加进这一行，而不是在它下面再造一条新的分界。
 pub(crate) fn insert_root_app(data: &mut AppData, app: AppEXE, index: usize) {
@@ -81,7 +150,6 @@ pub(crate) enum NodeKind {
 
 pub(crate) fn remove_node(data: &mut AppData, id: &str, kind: NodeKind) -> Option<Item> {
     // 顶层应用也要能被删除，否则「放在顶层」的应用会变成删不掉的钉子。
-    //
     // 删除后如果那一行空了，把空行一并摘掉 —— 留一个空的 `Apps` 节点会在
     // 界面上表现为一条没有内容的分界线，也拖不出任何东西。
     if matches!(kind, NodeKind::App) {
@@ -145,7 +213,6 @@ pub(crate) fn parent_exists(data: &AppData, id: &str) -> bool {
 }
 
 // 返回父节点所在的分组深度。
-//
 // 顶层分类返回 0，分类下的直接分组返回 1，以此类推。
 pub(crate) fn parent_depth(data: &AppData, id: &str) -> Option<usize> {
     if find_category(data, id).is_some() {

@@ -1,6 +1,9 @@
 import type { CSSProperties } from 'react'
 
+import { useAppDrag } from '../../hooks/useAppDrag'
 import { countApps } from '../../lib/tree'
+import { useCatalogStore } from '../../state/catalogStore'
+import { useUiStore } from '../../state/uiStore'
 import type { Category } from '../../types/catalog'
 import { IconButton } from '../common/IconButton'
 import { ItemList } from './ItemList'
@@ -16,6 +19,12 @@ interface CategorySectionProps {
 /** 一个顶层分类：标题行 + 折叠内容。 */
 export function CategorySection({ category, index }: CategorySectionProps) {
   const { activeDropId, toggleCollapse, contextMenuForNode, addAppTo } = useTreeActions()
+  const data = useCatalogStore((state) => state.data)
+  const moveApp = useCatalogStore((state) => state.moveApp)
+  const draggingAppId = useUiStore((state) => state.draggingAppId)
+  const setDraggingApp = useUiStore((state) => state.setDraggingApp)
+  const setDropHint = useUiStore((state) => state.setDropHint)
+  const drag = useAppDrag({ data, moveApp, setDraggingApp, setDropHint, draggingAppId })
 
   const location = {
     id: category.id,
@@ -29,8 +38,15 @@ export function CategorySection({ category, index }: CategorySectionProps) {
     // `--dc-i` 供收束动画做错峰：分类按顺序依次左收，形成「被抽走」的层次感。
     // 顶层区占用 0，分类从 1 起。
     <section
-      className="dc-converge"
+      className={`dc-converge ${draggingAppId ? 'dc-drop-zone' : ''}`}
       style={{ '--dc-i': index + 1 } as CSSProperties}
+      // 把应用拖到分类行上 → 放进这个分类（追加到末尾）。
+      onDragOver={(event) => {
+        if (!draggingAppId) return
+        event.preventDefault()
+        event.dataTransfer.dropEffect = 'move'
+      }}
+      onDrop={(event) => drag.onDropOnContainer(event, category.id)}
     >
       <Row
         depth={0}

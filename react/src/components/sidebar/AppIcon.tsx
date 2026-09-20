@@ -1,6 +1,7 @@
 import { useState } from 'react'
 
 import { ICON_FALLBACK_GLYPH, ICON_TYPE_LABEL } from '../../lib/tree'
+import { useUiStore } from '../../state/uiStore'
 import type { AppEXE } from '../../types/catalog'
 
 interface AppIconProps {
@@ -9,6 +10,10 @@ interface AppIconProps {
   onLaunch: () => void
   onSelect: () => void
   onContextMenu: (event: React.MouseEvent<HTMLElement>) => void
+  onDragStart: (event: React.DragEvent<HTMLElement>) => void
+  onDragOver: (event: React.DragEvent<HTMLElement>) => void
+  onDrop: (event: React.DragEvent<HTMLElement>) => void
+  onDragEnd: () => void
 }
 
 /**
@@ -16,6 +21,10 @@ interface AppIconProps {
  *
  * 图标地址由后端给出（asset 协议 URL 或内置 data URL）。加载失败时退回
  * 按来源类型取的表情符号，避免侧栏里出现破图。
+ *
+ * 图标本身可拖拽：拖到另一个图标的左半 / 右半，表示插到它前面 / 后面，被瞄准的
+ * 那一侧会画出一条插入线（`.dc-drop-*`）。拖拽期间不触发启动，避免「想拖却打开
+ * 了程序」。
  */
 export function AppIcon({
   app,
@@ -23,9 +32,19 @@ export function AppIcon({
   onLaunch,
   onSelect,
   onContextMenu,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd,
 }: AppIconProps) {
   const [failed, setFailed] = useState(false)
   const showImage = app.iconUrl.length > 0 && !failed
+
+  const draggingId = useUiStore((state) => state.draggingAppId)
+  const dropHint = useUiStore((state) => state.dropHint)
+
+  const isDragging = draggingId === app.id
+  const hint = dropHint?.appId === app.id ? dropHint.position : null
 
   const surface = selected
     ? 'bg-active ring-1 ring-inset ring-focus'
@@ -35,11 +54,20 @@ export function AppIcon({
     <button
       type="button"
       data-app-id={app.id}
+      draggable
       title={`${app.name}\n${ICON_TYPE_LABEL[app.iconType]}\n${app.sourcePath}`}
       onClick={onLaunch}
       onFocus={onSelect}
       onContextMenu={onContextMenu}
-      className={`flex w-icon-item shrink-0 flex-col items-center rounded-[6px] py-[0.6cqw] transition-colors duration-100 outline-none ${surface}`}
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDrop={onDrop}
+      onDragEnd={onDragEnd}
+      className={`dc-app-icon relative flex w-icon-item shrink-0 flex-col items-center rounded-[6px] py-[0.6cqw] outline-none transition-colors duration-100 ${surface} ${
+        isDragging ? 'opacity-40' : ''
+      } ${hint === 'before' ? 'dc-drop-before' : ''} ${
+        hint === 'after' ? 'dc-drop-after' : ''
+      }`}
     >
       <span className="flex h-icon-glyph w-icon-glyph items-center justify-center">
         {showImage ? (

@@ -5,7 +5,7 @@ use std::fs;
 use app_lib::{
     models::{
         AddAppRequest, AddCategoryRequest, AddGroupRequest, Category, DeleteRequest, IconType,
-        Item, RenameRequest, RootItem,
+        Item, MoveAppRequest, RenameRequest, RootItem,
     },
     services::catalog,
     storage::{DataRepository, JsonStore},
@@ -617,6 +617,210 @@ fn a_top_level_row_holds_several_apps_and_empties_itself_when_drained() {
     let data = catalog::get_all_data(&state).unwrap();
     assert_eq!(data.items.len(), 1, "删空后空行应被移除");
     assert!(matches!(&data.items[0], RootItem::Category(_)));
+}
+
+#[test]
+fn an_app_can_be_moved_between_the_root_and_a_category() {
+    let directory = TestDir::new("move-app");
+    let state = directory.state();
+    let category = catalog::add_category(
+        &state,
+        AddCategoryRequest {
+            name: "分类".to_owned(),
+        },
+    )
+    .unwrap();
+
+    let make = |name: &str| {
+        catalog::add_app(
+            &state,
+            AddAppRequest {
+                parent_id: None,
+                source_path: format!("https://example.com/{name}"),
+                name: Some(name.to_owned()),
+                root_index: None,
+            },
+        )
+        .expect("app should be added")
+    };
+
+    let a = make("甲");
+    let b = make("乙");
+
+    // 甲 移进分类（分类此时还是空的，用「追加到末尾」）。
+    catalog::move_app(
+        &state,
+        MoveAppRequest {
+            id: a.id.clone(),
+            parent_id: Some(category.id.clone()),
+            before_id: None,
+        },
+    )
+    .expect("move should succeed");
+
+    let data = catalog::get_all_data(&state).unwrap();
+    assert_eq!(data.items.len(), 2, "顶层剩一行乙 + 一个分类");
+    assert!(data.root_apps().all(|app| app.id != a.id), "甲 已不在顶层");
+    let in_category = data
+        .root_categories()
+        .flat_map(|c| c.groups.iter())
+        .filter_map(|item| match item {
+            Item::App(app) => Some(app.id.clone()),
+            Item::Group(_) => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(in_category, vec![a.id.clone()], "甲 进了分类");
+
+    // 再把它挪回顶层，插到「乙」之前。
+    catalog::move_app(
+        &state,
+        MoveAppRequest {
+            id: a.id.clone(),
+            parent_id: None,
+            before_id: Some(b.id.clone()),
+        },
+    )
+    .expect("move back should succeed");
+
+    let data = catalog::get_all_data(&state).unwrap();
+    let top: Vec<String> = data.root_apps().map(|app| app.name.clone()).collect();
+    assert_eq!(top, vec!["甲".to_owned(), "乙".to_owned()], "甲 应排到最前");
+}
+
+#[test]
+fn reordering_inside_one_container_compensates_for_the_removal_shift() {
+    let directory = TestDir::new("move-app-shift");
+    let state = directory.state();
+    let category = catalog::add_category(
+        &state,
+        AddCategoryRequest {
+            name: "分类".to_owned(),
+        },
+    )
+    .unwrap();
+
+    let mut ids = Vec::new();
+    for name in ["一", "二", "三"] {
+        ids.push(
+            catalog::add_app(
+                &state,
+                AddAppRequest {
+                    parent_id: Some(category.id.clone()),
+                    source_path: format!("https://example.com/{name}"),
+                    name: Some(name.to_owned()),
+                    root_index: None,
+                },
+            )
+            .expect("app should be added")
+            .id,
+        );
+    }
+
+    // 把「一」挪到末尾（参照为 null 即追加）。
+    catalog::move_app(
+        &state,
+        MoveAppRequest {
+            id: ids[0].clone(),
+            parent_id: Some(category.id.clone()),
+            before_id: None,
+        },
+    )
+    .expect("move should succeed");
+
+    let names = |data: &app_lib::models::AppData| {
+        data.root_categories()
+            .flat_map(|c| c.groups.iter())
+            .filter_map(|item| match item {
+                Item::App(app) => Some(app.name.clone()),
+                Item::Group(_) => None,
+            })
+            .collect::<Vec<_>>()
+    };
+
+    let data = catalog::get_all_data(&state).unwrap();
+    assert_eq!(
+        names(&data),
+        vec!["二".to_owned(), "三".to_owned(), "一".to_owned()],
+        "同一容器内前移需要修正下标偏移，否则会插偏一位"
+    );
+
+    // 再把「三」挪到最前（插到「二」之前）。
+    catalog::move_app(
+        &state,
+        MoveAppRequest {
+            id: ids[2].clone(),
+            parent_id: Some(category.id.clone()),
+            before_id: Some(ids[1].clone()),
+        },
+    )
+    .expect("move should succeed");
+    let data = catalog::get_all_data(&state).unwrap();
+    assert_eq!(
+        names(&data),
+        vec!["三".to_owned(), "二".to_owned(), "一".to_owned()]
+    );
+}
+
+#[test]
+fn an_app_can_be_reordered_within_one_top_level_row() {
+    let directory = TestDir::new("move-app-in-row");
+    let state = directory.state();
+
+    let mut ids = Vec::new();
+    for name in ["红", "绿", "蓝"] {
+        ids.push(
+            catalog::add_app(
+                &state,
+                AddAppRequest {
+                    parent_id: None,
+                    source_path: format!("https://example.com/{name}"),
+                    name: Some(name.to_owned()),
+                    // 都插到第 0 行，并成一行。
+                    root_index: Some(0),
+                },
+            )
+            .expect("app should be added")
+            .id,
+        );
+    }
+
+    let order = || {
+        catalog::get_all_data(&state)
+            .unwrap()
+            .root_apps()
+            .map(|app| app.name.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(order(), vec!["红", "绿", "蓝"]);
+
+    // 「红」拖到「蓝」前面 —— 必须真的落在两个图标之间，而不是被并入行尾。
+    catalog::move_app(
+        &state,
+        MoveAppRequest {
+            id: ids[0].clone(),
+            parent_id: None,
+            before_id: Some(ids[2].clone()),
+        },
+    )
+    .expect("move should succeed");
+    assert_eq!(order(), vec!["绿", "红", "蓝"]);
+}
+
+#[test]
+fn moving_an_unknown_app_reports_not_found() {
+    let directory = TestDir::new("move-app-missing");
+    let state = directory.state();
+
+    let error = catalog::move_app(
+        &state,
+        MoveAppRequest {
+            id: "no-such-app".to_owned(),
+            parent_id: None,
+            before_id: None,
+        },
+    )
+    .expect_err("未知应用应当报错");
+    assert_eq!(error.code, "app_not_found");
 }
 
 #[test]

@@ -53,6 +53,9 @@ export const tauriBackend: Backend = {
     rootIndex?: number,
   ) => invoke<AppEXE>('add_app', { parentId, sourcePath, name, rootIndex }),
 
+  moveApp: (id: string, parentId: string | null, beforeId: string | null) =>
+    invoke<void>('move_app', { id, parentId, beforeId }),
+
   renameApp: (id: string, name: string) =>
     invoke<AppEXE>('rename_app', { id, name }),
 

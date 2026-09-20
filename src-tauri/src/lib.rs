@@ -93,6 +93,7 @@ pub fn run() {
             commands::catalog::rename_group,
             commands::catalog::delete_group,
             commands::catalog::add_app,
+            commands::catalog::move_app,
             commands::catalog::rename_app,
             commands::catalog::delete_app,
             commands::settings::get_settings,

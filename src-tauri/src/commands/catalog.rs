@@ -2,7 +2,7 @@ use crate::{
     error::AppResult,
     models::{
         AddAppRequest, AddCategoryRequest, AddGroupRequest, AppData, AppEXE, Category,
-        DeleteRequest, Group, RenameRequest,
+        DeleteRequest, Group, MoveAppRequest, RenameRequest,
     },
     services,
     state::AppState,
@@ -82,6 +82,27 @@ pub fn add_app(
             source_path,
             name,
             root_index,
+        },
+    )
+}
+
+// 把一个应用移动到新位置（拖拽换位）。
+//
+// `parentId` 传 `null` 表示移到顶层；`beforeId` 是参照节点（插到它之前），
+// 传 `null` 表示插到目标容器的末尾。
+#[tauri::command]
+pub fn move_app(
+    id: String,
+    parent_id: Option<String>,
+    before_id: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> AppResult<()> {
+    services::catalog::move_app(
+        state.inner(),
+        MoveAppRequest {
+            id,
+            parent_id,
+            before_id,
         },
     )
 }

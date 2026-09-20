@@ -50,7 +50,10 @@ export function ItemList({ items, depth, parentId, parentKind }: ItemListProps) 
       {toBlocks(items).map((block) => {
         if (block.kind === 'apps') {
           // 相邻应用共享一个网格，key 取首个应用的 ID 即可稳定。
-          return <AppGrid key={`apps-${block.apps[0].id}`} apps={block.apps} />
+          // `parentId` 让拖到网格空白处时知道该追加到哪个容器。
+          return (
+            <AppGrid key={`apps-${block.apps[0].id}`} apps={block.apps} parentId={parentId} />
+          )
         }
 
         const { group } = block

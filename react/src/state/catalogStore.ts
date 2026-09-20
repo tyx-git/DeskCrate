@@ -35,6 +35,17 @@ interface CatalogState {
     name?: string,
     rootIndex?: number,
   ) => Promise<AppEXE | null>
+  /**
+   * 把一个应用移动到新位置（拖拽换位）。
+   *
+   * `parentId` 为 `null` 表示移到顶层；`beforeId` 是参照节点（插到它之前），
+   * `null` 表示插到目标容器末尾。
+   */
+  moveApp: (
+    id: string,
+    parentId: string | null,
+    beforeId: string | null,
+  ) => Promise<boolean>
   renameApp: (id: string, name: string) => Promise<boolean>
   deleteApp: (id: string) => Promise<boolean>
 
@@ -150,6 +161,17 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
         },
       }))
       return app
+    })
+  },
+
+  async moveApp(id, parentId, beforeId) {
+    // 落盘由后端负责（它才知道最终顺序）；这里只负责事后重新拉一次，
+    // 免得前端的乐观更新和后端算出来的顺序不一致 —— 排序规则在后端。
+    return run(set, get, false, async () => {
+      await backend.moveApp(id, parentId, beforeId)
+      const fresh = await backend.getAllData()
+      set({ data: applyCollapseOverrides(fresh) })
+      return true
     })
   },
 

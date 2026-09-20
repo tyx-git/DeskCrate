@@ -244,6 +244,25 @@ class MockBackend implements Backend {
     return this.data.items.flatMap((item) => (isAppsRoot(item) ? item.Apps : []))
   }
 
+  /** 根节点上分类与分组的并集（就地引用）。 */
+  private containers(): Array<Category | Group> {
+    const list: Array<Category | Group> = []
+    for (const item of this.data.items) {
+      if (!isCategoryRoot(item)) continue
+      list.push(item.Category)
+      const collect = (groups: Item[]) => {
+        for (const entry of groups) {
+          if ('Group' in entry) {
+            list.push(entry.Group)
+            collect(entry.Group.children)
+          }
+        }
+      }
+      collect(item.Category.groups)
+    }
+    return list
+  }
+
   /** 删除一个顶层应用，删空的那一行一并摘掉。 */
   private removeTopLevelApp(id: string): void {
     this.data.items = this.data.items
@@ -507,6 +526,78 @@ class MockBackend implements Backend {
     return structuredClone(app)
   }
 
+  async moveApp(id: string, parentId: string | null, beforeId: string | null): Promise<void> {
+    await delay()
+
+    // 与后端一致：先从原位置摘下来，再按参照节点插回去。
+    let moved: AppEXE | null = null
+
+    for (const item of this.data.items) {
+      if (!isAppsRoot(item)) continue
+      const found = item.Apps.find((app) => app.id === id)
+      if (!found) continue
+      moved = found
+      item.Apps = item.Apps.filter((app) => app.id !== id)
+      break
+    }
+
+    if (!moved) {
+      for (const category of this.categories()) {
+        const result = removeAppFromItems(category.groups, id)
+        category.groups = result.items
+        if (result.app) {
+          moved = result.app
+          break
+        }
+      }
+    }
+
+    // 顶层行被掏空就摘掉，不能留下一条没有内容的分界。
+    this.data.items = this.data.items.filter((item) => !isAppsRoot(item) || item.Apps.length > 0)
+
+    if (!moved) {
+      throw { code: 'app_not_found', message: `找不到应用: ${id}` }
+    }
+    const app: AppEXE = moved
+
+    if (parentId === null) {
+      if (beforeId === null) {
+        const last = this.data.items[this.data.items.length - 1]
+        if (last && isAppsRoot(last)) last.Apps.push(app)
+        else this.data.items.push({ Apps: [app] })
+      } else {
+        const placed = this.data.items.some((item) => {
+          if (!isAppsRoot(item)) return false
+          const at = item.Apps.findIndex((one) => one.id === beforeId)
+          if (at < 0) return false
+          item.Apps = [...item.Apps.slice(0, at), app, ...item.Apps.slice(at)]
+          return true
+        })
+        if (!placed) {
+          throw { code: 'reference_not_found', message: `找不到参照节点: ${beforeId}` }
+        }
+      }
+    } else {
+      const container = this.containers().find((item) => item.id === parentId)
+      if (!container) {
+        throw { code: 'parent_not_found', message: `找不到目标容器: ${parentId}` }
+      }
+      const entries = 'groups' in container ? container.groups : container.children
+      const at =
+        beforeId === null
+          ? -1
+          : entries.findIndex((entry) =>
+              'App' in entry ? entry.App.id === beforeId : entry.Group.id === beforeId,
+            )
+      const next = [...entries]
+      next.splice(at < 0 ? next.length : at, 0, { App: app })
+      if ('groups' in container) container.groups = next
+      else container.children = next
+    }
+
+    this.persistData()
+  }
+
   async renameApp(id: string, name: string): Promise<AppEXE> {
     await delay()
     const renamed = normalizeName(name, '应用')
@@ -565,6 +656,31 @@ class MockBackend implements Backend {
     // 浏览器里无法真的启动程序，留一条日志方便确认调用链通了。
     console.info('[mock] launch_icon', id)
   }
+}
+
+/** 从一层节点里摘掉一个应用，返回摘下的应用与剩下的节点。 */
+function removeAppFromItems(
+  items: Item[],
+  id: string,
+): { app: AppEXE | null; items: Item[] } {
+  let taken: AppEXE | null = null
+
+  const walk = (entries: Item[]): Item[] =>
+    entries
+      .map((entry): Item | null => {
+        if ('App' in entry) {
+          if (entry.App.id === id) {
+            taken = entry.App
+            return null
+          }
+          return entry
+        }
+        return { Group: { ...entry.Group, children: walk(entry.Group.children) } }
+      })
+      .filter((entry): entry is Item => entry !== null)
+
+  const next = walk(items)
+  return { app: taken, items: next }
 }
 
 function findAppInTree(data: AppData, id: string): AppEXE | null {
