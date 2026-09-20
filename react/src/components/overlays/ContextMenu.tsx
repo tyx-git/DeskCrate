@@ -262,7 +262,9 @@ function buildEntries(target: NodeLocation, context: BuildContext): MenuNode[] {
   }
 
   if (target.kind === 'category') {
-    const category = data.categories.find((item) => item.id === target.id)
+    const category = data.items
+      .flatMap((item) => ('Category' in item ? [item.Category] : []))
+      .find((item) => item.id === target.id)
     const descendants = category ? countApps(category.groups) : 0
 
     return [

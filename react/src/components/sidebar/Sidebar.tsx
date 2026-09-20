@@ -11,12 +11,18 @@ import type { TreeActions } from './treeActions'
 interface SidebarProps {
   /** 文件拖拽当前悬停的节点 ID，由外壳的 `useFileDrop` 提供。 */
   activeDropId: string | null
-  /** 是否正在拖拽文件；顶层区靠它决定是否临时显示落点。 */
+  /** 文件拖拽当前悬停的插入位置（第几个根节点之前）。 */
+  activeDropIndex: number | null
+  /** 是否正在拖拽文件。 */
   isDragging: boolean
 }
 
 /** 展开态侧栏：玻璃面板 + 头部 + 滚动区 + 底栏。 */
-export function Sidebar({ activeDropId, isDragging }: SidebarProps) {
+export function Sidebar({
+  activeDropId,
+  activeDropIndex,
+  isDragging,
+}: SidebarProps) {
   const data = useCatalogStore((state) => state.data)
   const launchApp = useCatalogStore((state) => state.launchApp)
   const toggleCollapse = useCatalogStore((state) => state.toggleCollapse)
@@ -61,7 +67,7 @@ export function Sidebar({ activeDropId, isDragging }: SidebarProps) {
     <TreeProvider actions={actions}>
       <div className="group/panel flex h-full w-full flex-col overflow-hidden rounded-panel bg-panel shadow-panel backdrop-blur-glass">
         <SidebarHeader />
-        <SidebarBody activeDropId={activeDropId} isDragging={isDragging} />
+        <SidebarBody activeDropIndex={activeDropIndex} isDragging={isDragging} />
         <SidebarFooter />
       </div>
     </TreeProvider>

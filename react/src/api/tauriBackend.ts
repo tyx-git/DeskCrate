@@ -46,8 +46,12 @@ export const tauriBackend: Backend = {
   deleteGroup: (id: string) => invoke<void>('delete_group', { id }),
 
   // `parentId` 传 `null`：Rust 侧的形参是 `Option<String>`，null 即顶层。
-  addApp: (parentId: string | null, sourcePath: string, name?: string) =>
-    invoke<AppEXE>('add_app', { parentId, sourcePath, name }),
+  addApp: (
+    parentId: string | null,
+    sourcePath: string,
+    name?: string,
+    rootIndex?: number,
+  ) => invoke<AppEXE>('add_app', { parentId, sourcePath, name, rootIndex }),
 
   renameApp: (id: string, name: string) =>
     invoke<AppEXE>('rename_app', { id, name }),

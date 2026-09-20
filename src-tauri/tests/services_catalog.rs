@@ -4,8 +4,8 @@ use std::fs;
 
 use app_lib::{
     models::{
-        AddAppRequest, AddCategoryRequest, AddGroupRequest, DeleteRequest, IconType, Item,
-        RenameRequest,
+        AddAppRequest, AddCategoryRequest, AddGroupRequest, Category, DeleteRequest, IconType,
+        Item, RenameRequest, RootItem,
     },
     services::catalog,
     storage::{DataRepository, JsonStore},
@@ -61,9 +61,10 @@ fn category_crud_uses_generated_uuid_and_persists_changes() {
     .expect("category should be deleted");
 
     let data = catalog::get_all_data(&state).expect("data should load");
-    assert_eq!(data.categories.len(), 1);
-    assert_eq!(data.categories[0].id, first.id);
-    assert_eq!(data.categories[0].name, "工具");
+    let categories: Vec<&Category> = data.root_categories().collect();
+    assert_eq!(categories.len(), 1);
+    assert_eq!(categories[0].id, first.id);
+    assert_eq!(categories[0].name, "工具");
 }
 
 #[test]
@@ -90,7 +91,7 @@ fn category_and_node_name_validation_does_not_change_data() {
     .expect_err("missing parent should fail");
     assert_eq!(error.code, "parent_not_found");
 
-    assert!(catalog::get_all_data(&state).unwrap().categories.is_empty());
+    assert!(catalog::get_all_data(&state).unwrap().items.is_empty());
 }
 
 #[test]
@@ -189,6 +190,7 @@ fn app_crud_supports_urls_and_uses_id_lookup() {
             parent_id: Some(category.id.clone()),
             source_path: "  https://www.rust-lang.org/learn  ".to_owned(),
             name: None,
+            root_index: None,
         },
     )
     .unwrap();
@@ -256,6 +258,7 @@ fn app_crud_classifies_regular_files_and_executables() {
             parent_id: Some(category.id.clone()),
             source_path: regular_file.to_string_lossy().into_owned(),
             name: None,
+            root_index: None,
         },
     )
     .expect("regular file should be accepted");
@@ -270,6 +273,7 @@ fn app_crud_classifies_regular_files_and_executables() {
             parent_id: Some(category.id),
             source_path: executable.to_string_lossy().into_owned(),
             name: None,
+            root_index: None,
         },
     )
     .expect("executable should be accepted");
@@ -299,6 +303,7 @@ fn local_folder_app_extracts_an_icon_and_delete_cleans_the_cache() {
             parent_id: Some(category.id),
             source_path: source_dir.to_string_lossy().into_owned(),
             name: Some("我的文件夹".to_owned()),
+            root_index: None,
         },
     )
     .expect("folder app should be added");
@@ -343,6 +348,7 @@ fn deleting_a_category_removes_descendants_and_their_icon_cache() {
             parent_id: Some(group.id),
             source_path: source_dir.to_string_lossy().into_owned(),
             name: None,
+            root_index: None,
         },
     )
     .unwrap();
@@ -351,7 +357,7 @@ fn deleting_a_category_removes_descendants_and_their_icon_cache() {
 
     catalog::delete_category(&state, DeleteRequest { id: category.id }).unwrap();
     assert!(!icon_path.exists());
-    assert!(catalog::get_all_data(&state).unwrap().categories.is_empty());
+    assert!(catalog::get_all_data(&state).unwrap().items.is_empty());
 }
 
 #[test]
@@ -373,6 +379,7 @@ fn orphan_icon_sweep_removes_only_unreferenced_uuid_files() {
             parent_id: Some(category.id),
             source_path: source_dir.to_string_lossy().into_owned(),
             name: None,
+            root_index: None,
         },
     )
     .unwrap();
@@ -417,6 +424,7 @@ fn invalid_app_source_and_wrong_node_kinds_are_rejected() {
             parent_id: Some(category.id.clone()),
             source_path: " \0 ".to_owned(),
             name: None,
+            root_index: None,
         },
     )
     .expect_err("NUL source should fail");
@@ -440,9 +448,10 @@ fn invalid_app_source_and_wrong_node_kinds_are_rejected() {
     assert_eq!(error.code, "category_not_found");
 
     let data = catalog::get_all_data(&state).unwrap();
-    assert_eq!(data.categories.len(), 1);
-    assert!(data.categories[0].groups.is_empty());
-    assert!(data.categories[0]
+    let categories: Vec<&Category> = data.root_categories().collect();
+    assert_eq!(categories.len(), 1);
+    assert!(categories[0].groups.is_empty());
+    assert!(categories[0]
         .groups
         .iter()
         .all(|item| matches!(item, Item::Group(_) | Item::App(_))));
@@ -469,17 +478,145 @@ fn missing_local_app_source_is_rejected_even_when_a_fallback_icon_exists() {
                 .to_string_lossy()
                 .into_owned(),
             name: None,
+            root_index: None,
         },
     )
     .expect_err("missing local source should be rejected");
 
     assert_eq!(error.code, "source_not_found");
     assert_eq!(
-        catalog::get_all_data(&state).unwrap().categories[0]
+        catalog::get_all_data(&state)
+            .unwrap()
+            .root_categories()
+            .next()
+            .expect("分类应仍然存在")
             .groups
             .len(),
         0
     );
+}
+
+#[test]
+fn top_level_apps_can_be_inserted_at_any_position_between_categories() {
+    let directory = TestDir::new("root-insert-position");
+    let state = directory.state();
+
+    let first = catalog::add_category(
+        &state,
+        AddCategoryRequest {
+            name: "第一个分类".to_owned(),
+        },
+    )
+    .unwrap();
+    let second = catalog::add_category(
+        &state,
+        AddCategoryRequest {
+            name: "第二个分类".to_owned(),
+        },
+    )
+    .unwrap();
+
+    let add_at = |name: &str, index: usize| {
+        catalog::add_app(
+            &state,
+            AddAppRequest {
+                parent_id: None,
+                source_path: format!("https://example.com/{name}"),
+                name: Some(name.to_owned()),
+                root_index: Some(index),
+            },
+        )
+        .expect("top level app should be added")
+    };
+
+    // 插到两个分类之间：期望顺序是 分类 / 应用 / 分类。
+    let between = add_at("中间", 1);
+    // 插到最上方（下标 0）。
+    let top = add_at("最上面", 0);
+    // 下标越界时应当被夹到末尾，而不是报错。
+    let bottom = add_at("最下面", usize::MAX);
+
+    let data = catalog::get_all_data(&state).unwrap();
+    let shape: Vec<String> = data
+        .items
+        .iter()
+        .map(|item| match item {
+            RootItem::Apps(apps) => format!(
+                "Apps({})",
+                apps.iter()
+                    .map(|a| a.name.clone())
+                    .collect::<Vec<_>>()
+                    .join("+")
+            ),
+            RootItem::Category(category) => format!("Category({})", category.name),
+        })
+        .collect();
+
+    assert_eq!(
+        shape,
+        vec![
+            format!("Apps({})", top.name),
+            format!("Category({})", first.name),
+            format!("Apps({})", between.name),
+            format!("Category({})", second.name),
+            format!("Apps({})", bottom.name),
+        ],
+        "顶层应用应能与分类交错排列，且顺序与插入位置一致"
+    );
+}
+
+#[test]
+fn a_top_level_row_holds_several_apps_and_empties_itself_when_drained() {
+    let directory = TestDir::new("root-row-multi");
+    let state = directory.state();
+    let category = catalog::add_category(
+        &state,
+        AddCategoryRequest {
+            name: "分类".to_owned(),
+        },
+    )
+    .unwrap();
+
+    let add = |name: &str| {
+        catalog::add_app(
+            &state,
+            AddAppRequest {
+                parent_id: None,
+                source_path: format!("https://example.com/{name}"),
+                name: Some(name.to_owned()),
+                // 都插到分类之前：连续的顶层应用应当并进同一行。
+                root_index: Some(0),
+            },
+        )
+        .expect("top level app should be added")
+    };
+
+    let a = add("甲");
+    let b = add("乙");
+    let c = add("丙");
+
+    let data = catalog::get_all_data(&state).unwrap();
+    assert_eq!(data.items.len(), 2, "三个应用应并成一行，再跟一个分类");
+    match &data.items[0] {
+        RootItem::Apps(apps) => {
+            assert_eq!(apps.len(), 3, "一行里应当能动态存放多个顶层应用");
+            // 都插在同一行，按插入先后排列。
+            assert_eq!(
+                apps.iter().map(|app| app.id.clone()).collect::<Vec<_>>(),
+                vec![a.id.clone(), b.id.clone(), c.id.clone()]
+            );
+        }
+        RootItem::Category(_) => panic!("第一个节点应当是一行顶层应用"),
+    }
+    assert!(matches!(&data.items[1], RootItem::Category(c) if c.id == category.id));
+
+    // 删空这一行时，空节点要一并摘掉，不能留下一条没有内容的分界线。
+    for app in [&a, &b, &c] {
+        catalog::delete_app(&state, DeleteRequest { id: app.id.clone() }).unwrap();
+    }
+    let data = catalog::get_all_data(&state).unwrap();
+    assert_eq!(data.items.len(), 1, "删空后空行应被移除");
+    assert!(matches!(&data.items[0], RootItem::Category(_)));
 }
 
 #[test]
@@ -502,6 +639,7 @@ fn url_app_without_a_reachable_site_falls_back_to_the_builtin_icon() {
             // 不存在的域名那样把测试套件拖慢几秒。
             source_path: "http://127.0.0.1:1/".to_owned(),
             name: None,
+            root_index: None,
         },
     )
     .expect("抓不到图标不应该让「添加网址」这件事失败");
@@ -530,14 +668,21 @@ fn root_level_apps_can_be_added_renamed_and_deleted() {
             parent_id: None,
             source_path: source_dir.to_string_lossy().into_owned(),
             name: Some("顶层应用".to_owned()),
+            root_index: None,
         },
     )
     .expect("root level app should be added");
 
     let data = catalog::get_all_data(&state).unwrap();
-    assert_eq!(data.apps.len(), 1, "顶层应用应落在根节点的 apps 上");
-    assert_eq!(data.apps[0].id, app.id);
-    assert!(data.categories.is_empty(), "不应该凭空多出一个分类");
+    assert_eq!(data.items.len(), 1, "顶层应用应落在根节点上");
+    assert_eq!(
+        data.root_apps().next().map(|a| a.id.clone()),
+        Some(app.id.clone())
+    );
+    assert!(
+        data.root_categories().next().is_none(),
+        "不应该凭空多出一个分类"
+    );
 
     // 顶层应用必须能被后续所有按 ID 的操作找到：重命名、启动、删除。
     let renamed = catalog::rename_app(
@@ -572,6 +717,7 @@ fn root_level_app_icons_are_not_treated_as_orphans() {
             parent_id: None,
             source_path: source_dir.to_string_lossy().into_owned(),
             name: None,
+            root_index: None,
         },
     )
     .unwrap();
@@ -596,7 +742,7 @@ fn legacy_data_without_the_root_apps_field_still_loads() {
 
     let data = store.load_data().expect("legacy data should load");
     assert!(data.apps.is_empty());
-    assert!(data.categories.is_empty());
+    assert!(data.items.is_empty());
 }
 
 #[test]

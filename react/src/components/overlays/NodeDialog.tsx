@@ -297,7 +297,7 @@ function DialogForm({ dialog }: { dialog: DialogState }) {
           <p className="mt-[3%] text-chip leading-[1.4] text-ink-faint">
             {isPreviewMode
               ? '浏览器预览模式下不会真的解析图标，只做本地记录。'
-              : '也可以直接把文件、文件夹或快捷方式拖到顶层的提示区，或拖到分类、分组上。填网址会自动抓取站点图标。'}
+              : '也可以把文件、文件夹或快捷方式直接拖到侧栏：拖到分类上就进该分类，拖到两条分界线之间则作为顶层应用插在那个位置。填网址会自动抓取站点图标。'}
           </p>
         ) : null}
 

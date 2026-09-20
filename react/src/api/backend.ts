@@ -31,11 +31,15 @@ export interface Backend {
   addGroup(parentId: string, name: string): Promise<Group>
   renameGroup(id: string, name: string): Promise<Group>
   deleteGroup(id: string): Promise<void>
-  /** `parentId` 为 `null` 表示直接放到顶层。 */
+  /**
+   * `parentId` 为 `null` 表示放到顶层，`rootIndex` 指定插到第几个根节点之前
+   * （省略则追加到最下方）；放进分类或分组时忽略 `rootIndex`。
+   */
   addApp(
     parentId: string | null,
     sourcePath: string,
     name?: string,
+    rootIndex?: number,
   ): Promise<AppEXE>
   renameApp(id: string, name: string): Promise<AppEXE>
   deleteApp(id: string): Promise<void>

@@ -1,12 +1,14 @@
 import {
   asApp,
   asGroup,
+  isAppsRoot,
   type AppData,
   type AppEXE,
   type Category,
   type Group,
   type IconType,
   type Item,
+  type RootItem,
 } from '../types/catalog'
 
 /**
@@ -17,6 +19,94 @@ import {
  * 发给后端之前翻译成 `null`（后端用 `parentId: null` 表示顶层）。
  */
 export const ROOT_ID = '__root__'
+
+/** 按显示顺序取出根节点上的所有顶层应用。 */
+export function rootApps(data: AppData): AppEXE[] {
+  return data.items.flatMap((item) => (isAppsRoot(item) ? item.Apps : []))
+}
+
+/** 按显示顺序取出根节点上的所有分类。 */
+export function rootCategories(data: AppData): Category[] {
+  return data.items.flatMap((item) => ('Category' in item ? [item.Category] : []))
+}
+
+/** 根节点上分类的个数（顶层应用行不算）。 */
+export function countRootCategories(data: AppData): number {
+  return data.items.filter((item) => 'Category' in item).length
+}
+
+/** 判断某个根节点是不是分类。 */
+export function asCategoryRoot(item: RootItem): Category | null {
+  return 'Category' in item ? item.Category : null
+}
+
+/** 判断某个根节点是不是一行顶层应用。 */
+export function asAppsRoot(item: RootItem): AppEXE[] | null {
+  return isAppsRoot(item) ? item.Apps : null
+}
+
+/**
+ * 把一个顶层应用插到第 `index` 个根节点之前。
+ *
+ * 合并规则与后端 `tree::insert_root_app` 完全一致：优先并入落点处那一行
+ * （`items[index]`），其次并入紧邻上方那一行（`items[index - 1]`），都没有才
+ * 新起一行。否则前端看到的顺序会和后端写进去的不一致，刷新一次就「跳位」。
+ *
+ * 之所以先并入而不是每次新起一行：拖到某一行的下边缘，直觉上就是加进这一行，
+ * 而不是在它下面再造一条新的分界。
+ */
+export function insertRootApp(items: RootItem[], app: AppEXE, index: number): RootItem[] {
+  const at = Math.min(Math.max(index, 0), items.length)
+  const next = [...items]
+
+  const current = next[at]
+  if (current && isAppsRoot(current)) {
+    next[at] = { Apps: [...current.Apps, app] }
+    return next
+  }
+
+  if (at > 0) {
+    const previous = next[at - 1]
+    if (previous && isAppsRoot(previous)) {
+      next[at - 1] = { Apps: [...previous.Apps, app] }
+      return next
+    }
+  }
+
+  next.splice(at, 0, { Apps: [app] })
+  return next
+}
+
+/** 删除一个应用（含分类内部的）；删空的那一行会从根节点上摘掉。 */
+export function removeRootApp(items: RootItem[], id: string): RootItem[] {
+  return items
+    .map((item) => {
+      if (isAppsRoot(item)) {
+        const kept = item.Apps.filter((app) => app.id !== id)
+        return kept.length === item.Apps.length ? item : { Apps: kept }
+      }
+      return {
+        Category: {
+          ...item.Category,
+          groups: removeNodeInItems(item.Category.groups, id),
+        },
+      }
+    })
+    .filter((item) => !isAppsRoot(item) || item.Apps.length > 0)
+}
+
+/** 从一层节点里删掉指定 ID 的应用或分组。 */
+function removeNodeInItems(items: Item[], id: string): Item[] {
+  return items.flatMap((item): Item[] => {
+    if ('App' in item) {
+      return item.App.id === id ? [] : [item]
+    }
+    if (item.Group.id === id) {
+      return []
+    }
+    return [{ Group: { ...item.Group, children: removeNodeInItems(item.Group.children, id) } }]
+  })
+}
 
 /** 按显示顺序展开出所有应用节点。 */
 export function collectApps(items: readonly Item[]): AppEXE[] {
@@ -61,19 +151,19 @@ export function countApps(items: readonly Item[]): number {
 /** 统计整份数据里的应用总数，含顶层应用。 */
 export function countAllApps(data: AppData): number {
   return (
-    data.apps.length +
-    data.categories.reduce((sum, category) => sum + countApps(category.groups), 0)
+    rootApps(data).length +
+    rootCategories(data).reduce((sum, category) => sum + countApps(category.groups), 0)
   )
 }
 
-/** 在整棵树中按 ID 查找应用节点。顶层应用优先，它们在分类之前。 */
+/** 在整棵树中按 ID 查找应用节点。 */
 export function findApp(data: AppData, id: string): AppEXE | null {
-  const root = data.apps.find((app) => app.id === id)
+  const root = rootApps(data).find((app) => app.id === id)
   if (root) {
     return root
   }
 
-  for (const category of data.categories) {
+  for (const category of rootCategories(data)) {
     const found = collectApps(category.groups).find((app) => app.id === id)
     if (found) {
       return found
@@ -119,25 +209,34 @@ export function filterTree(data: AppData, rawQuery: string): AppData {
       return []
     })
 
-  const categories = data.categories.flatMap((category): Category[] => {
-    const groups = filterItems(category.groups)
-    if (groups.length > 0) {
-      return [{ ...category, isCollapsed: false, groups }]
+  // 按根节点的顺序逐个过滤：顶层应用按名称/来源过滤（一行里剩下的合并成
+  // 一行），分类按原有规则过滤。顺序保持不变，空的一行会被丢掉。
+  const items = data.items.flatMap((item): RootItem[] => {
+    const apps = asAppsRoot(item)
+    if (apps) {
+      const kept = apps.filter((app) => matches(app.name) || matches(app.sourcePath))
+      return kept.length > 0 ? [{ Apps: kept }] : []
     }
 
+    const category = asCategoryRoot(item)
+    if (!category) {
+      return []
+    }
+
+    const groups = filterItems(category.groups)
+    if (groups.length > 0) {
+      return [{ Category: { ...category, isCollapsed: false, groups } }]
+    }
+
+    // 分类自身命中时保留它的全部子节点，让用户直接看到分类内容。
     if (matches(category.name)) {
-      return [{ ...category, isCollapsed: false }]
+      return [{ Category: { ...category, isCollapsed: false } }]
     }
 
     return []
   })
 
-  // 顶层应用按名称/来源过滤，命中规则与分类树里的应用保持一致。
-  const apps = data.apps.filter(
-    (app) => matches(app.name) || matches(app.sourcePath),
-  )
-
-  return { ...data, apps, categories }
+  return { ...data, items }
 }
 
 /**
@@ -146,8 +245,8 @@ export function filterTree(data: AppData, rawQuery: string): AppData {
  * 键盘导航只需要在可见项之间移动，所以折叠的分支必须被跳过。
  */
 export function collectVisibleApps(data: AppData): AppEXE[] {
-  // 顶层应用永远可见，且排在分类之前，与屏幕上的顺序一致。
-  const apps: AppEXE[] = [...data.apps]
+  // 顶层应用永远可见，顺序与屏幕上的顺序一致。
+  const apps: AppEXE[] = rootApps(data)
 
   const walk = (items: readonly Item[]) => {
     for (const item of items) {
@@ -164,7 +263,7 @@ export function collectVisibleApps(data: AppData): AppEXE[] {
     }
   }
 
-  for (const category of data.categories) {
+  for (const category of rootCategories(data)) {
     if (!category.isCollapsed) {
       walk(category.groups)
     }
@@ -197,7 +296,7 @@ export const ROOT_LOCATION: NodeLocation = {
 
 export function locateNode(data: AppData, id: string): NodeLocation | null {
   // 顶层应用没有父节点，右键菜单据此判断它不能被「移到别处」。
-  const rootApp = data.apps.find((app) => app.id === id)
+  const rootApp = rootApps(data).find((app) => app.id === id)
   if (rootApp) {
     return {
       id,
@@ -208,7 +307,7 @@ export function locateNode(data: AppData, id: string): NodeLocation | null {
     }
   }
 
-  for (const category of data.categories) {
+  for (const category of rootCategories(data)) {
     if (category.id === id) {
       return {
         id,
@@ -277,7 +376,7 @@ export const MAX_GROUP_DEPTH = 4
 
 /** 返回节点在分组树中的深度：顶层分类为 0，分类下的直接分组为 1，以此类推。 */
 export function depthOf(data: AppData, id: string): number | null {
-  for (const category of data.categories) {
+  for (const category of rootCategories(data)) {
     if (category.id === id) {
       return 0
     }
@@ -335,7 +434,7 @@ export const ICON_TYPE_LABEL: Record<IconType, string> = {
 
 /** 递归查找分组节点。 */
 export function findGroup(data: AppData, id: string): Group | null {
-  for (const category of data.categories) {
+  for (const category of rootCategories(data)) {
     const found = findGroupIn(category.groups, id)
     if (found) {
       return found

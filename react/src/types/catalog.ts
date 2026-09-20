@@ -54,17 +54,33 @@ export interface Category {
  */
 export type Item = { Group: Group } | { App: AppEXE };
 
+/**
+ * 根节点上的一段：**要么是一个分类，要么是一行顶层应用**。
+ *
+ * 一行里可以有任意多个顶层应用，渲染时合并成一个网格。
+ */
+export type RootItem = { Category: Category } | { Apps: AppEXE[] };
+
+/** 判断根节点是不是分类。 */
+export function isCategoryRoot(item: RootItem): item is { Category: Category } {
+  return 'Category' in item;
+}
+
+/** 判断根节点是不是一行顶层应用。 */
+export function isAppsRoot(item: RootItem): item is { Apps: AppEXE[] } {
+  return 'Apps' in item;
+}
+
 /** `data.json` 的根结构。 */
 export interface AppData {
   version: number;
-  categories: Category[];
   /**
-   * 直接挂在顶层的应用。
+   * 根节点的有序列表。顶层应用与分类**交错排列**，顺序即屏幕上的顺序。
    *
-   * 分类只是收纳方式，不是必须的容器：常用的那几个程序应该能一步放到侧栏
-   * 最上面。后端字段带 `serde(default)`，旧数据里没有它时等价于空数组。
+   * 后端字段带 `serde(default)`，旧数据（只有 `categories` / `apps`）会在读取时
+   * 被折成这个形状，前端只会看到 `items` 一种形态。
    */
-  apps: AppEXE[];
+  items: RootItem[];
 }
 
 /** 判断节点是否为分组。 */

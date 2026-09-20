@@ -8,7 +8,7 @@ use crate::{
     error::AppResult,
     models::{
         AddAppRequest, AddCategoryRequest, AddGroupRequest, AppData, AppEXE, AppError, Category,
-        DeleteRequest, Group, IconType, Item, RenameRequest,
+        DeleteRequest, Group, IconType, Item, RenameRequest, RootItem,
     },
     path,
     state::AppState,
@@ -47,7 +47,7 @@ pub fn add_category(state: &AppState, request: AddCategoryRequest) -> AppResult<
 
     let store = state.get_lock()?;
     store.mutate_data(|data| {
-        data.categories.push(category.clone());
+        data.items.push(RootItem::Category(category.clone()));
         Ok(())
     })?;
 
@@ -212,12 +212,13 @@ pub fn add_app(state: &AppState, request: AddAppRequest) -> AppResult<AppEXE> {
         }
     };
     if let Err(error) = store.mutate_data(|data| {
-        // 顶层应用没有父容器，直接挂在根节点的 `apps` 上；其余情况沿用
-        // 「按 parent_id 找到分类或分组再挂进去」的既有路径。
+        // 顶层应用按落点插进根节点的有序列表；放进分类/分组时沿用既有的
+        // 「按 parent_id 找到容器再追加」路径。
         match &request.parent_id {
             Some(parent_id) => append_item(data, parent_id, Item::App(app.clone()), "应用的父节点"),
             None => {
-                data.apps.push(app.clone());
+                // 没给下标就追加到最末尾（旧行为）。
+                tree::insert_root_app(data, app.clone(), request.root_index.unwrap_or(usize::MAX));
                 Ok(())
             }
         }
@@ -594,8 +595,8 @@ fn collect_app_ids(data: &AppData) -> HashSet<String> {
         }
     }
 
-    let mut ids: HashSet<String> = data.apps.iter().map(|app| app.id.clone()).collect();
-    for category in &data.categories {
+    let mut ids: HashSet<String> = data.root_apps().map(|app| app.id.clone()).collect();
+    for category in data.root_categories() {
         walk(&category.groups, &mut ids);
     }
     ids

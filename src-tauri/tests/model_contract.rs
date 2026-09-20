@@ -1,6 +1,6 @@
 use app_lib::models::{
     AddAppRequest, AddCategoryRequest, AddGroupRequest, AppData, AppEXE, AppError, Category,
-    DeleteRequest, Group, IconType, Item, RenameRequest,
+    DeleteRequest, Group, IconType, Item, RenameRequest, RootItem,
 };
 use serde_json::json;
 
@@ -20,8 +20,8 @@ fn sample_app() -> AppEXE {
 #[test]
 fn catalog_serializes_with_frontend_names_and_without_legacy_fields() {
     let data = AppData {
-        version: 1,
-        categories: vec![Category {
+        version: 2,
+        items: vec![RootItem::Category(Category {
             id: "category-1".to_owned(),
             name: "开发工具".to_owned(),
             is_collapsed: false,
@@ -33,14 +33,14 @@ fn catalog_serializes_with_frontend_names_and_without_legacy_fields() {
                 created_time: "2026-08-31T00:00:00Z".to_owned(),
             })],
             created_time: "2026-08-31T00:00:00Z".to_owned(),
-        }],
-        apps: Vec::new(),
+        })],
+        ..AppData::default()
     };
 
     let json = serde_json::to_value(&data).expect("catalog should serialize");
-    // 顶层应用是根节点上的独立数组，前端按 `data.apps` 取用。
-    assert_eq!(json["apps"], serde_json::json!([]));
-    let category = &json["categories"][0];
+    // 根节点是一个有序数组，分类与顶层应用混排。
+    assert_eq!(json["items"][0]["Category"]["name"], "开发工具");
+    let category = &json["items"][0]["Category"];
     let group = &category["groups"][0]["Group"];
     let app = &group["children"][0]["App"];
 
@@ -109,11 +109,44 @@ fn optional_app_fields_are_omitted_when_they_are_none() {
 }
 
 #[test]
-fn default_data_has_schema_version_one_and_no_categories() {
+fn default_data_has_schema_version_two_and_an_empty_root() {
     let data = AppData::default();
 
-    assert_eq!(data.version, 1);
+    assert_eq!(data.version, 2);
+    assert!(data.items.is_empty());
+    // 旧字段保持为空：它们只在读取历史文件时出现，之后一律折进 `items`。
     assert!(data.categories.is_empty());
+    assert!(data.apps.is_empty());
+}
+
+#[test]
+fn legacy_data_is_folded_into_the_ordered_root_list() {
+    // 旧结构：顶层应用单独一个数组 + 分类一个数组，应用固定在前。
+    let mut legacy = AppData {
+        version: 1,
+        items: Vec::new(),
+        apps: vec![sample_app()],
+        categories: vec![Category {
+            id: "category-1".to_owned(),
+            name: "开发工具".to_owned(),
+            is_collapsed: false,
+            groups: Vec::new(),
+            created_time: "2026-08-31T00:00:00Z".to_owned(),
+        }],
+    };
+    legacy.normalize();
+
+    assert_eq!(legacy.items.len(), 2, "一行顶层应用 + 一个分类");
+    assert!(matches!(&legacy.items[0], RootItem::Apps(apps) if apps.len() == 1));
+    assert!(matches!(&legacy.items[1], RootItem::Category(c) if c.id == "category-1"));
+    assert_eq!(legacy.version, 2);
+    // 旧字段已被掏空，避免同一份数据出现两处来源。
+    assert!(legacy.apps.is_empty() && legacy.categories.is_empty());
+
+    // 幂等：再归一化一次不应改变任何东西。
+    let before = legacy.clone();
+    legacy.normalize();
+    assert_eq!(legacy, before);
 }
 
 #[test]

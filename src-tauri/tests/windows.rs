@@ -3,7 +3,7 @@ mod support;
 use std::fs;
 
 use app_lib::{
-    models::{AppData, AppEXE, Category, CssSize, IconType, Item, ViewMode, WindowSize},
+    models::{AppData, AppEXE, Category, CssSize, IconType, Item, RootItem, ViewMode, WindowSize},
     services::{self, system},
     storage::DataRepository,
 };
@@ -26,15 +26,15 @@ fn app_record(source_path: &str, icon_type: IconType) -> AppEXE {
 fn state_with_app(directory: &TestDir, app: AppEXE) -> app_lib::state::AppState {
     let store = directory.store();
     let data = AppData {
-        version: 1,
-        categories: vec![Category {
+        version: 2,
+        items: vec![RootItem::Category(Category {
             id: "category-1".to_owned(),
             name: "系统测试".to_owned(),
             is_collapsed: false,
             groups: vec![Item::App(app)],
             created_time: "2026-08-31T00:00:00Z".to_owned(),
-        }],
-        apps: Vec::new(),
+        })],
+        ..AppData::default()
     };
     store.save_data(&data).expect("fixture data should save");
     app_lib::state::AppState::new(store)

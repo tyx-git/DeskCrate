@@ -33,6 +33,7 @@ fn service_tree_can_place_apps_and_groups_at_category_or_group_level() {
             parent_id: Some(category.id.clone()),
             source_path: "https://example.com/root".to_owned(),
             name: Some("根网址".to_owned()),
+            root_index: None,
         },
     )
     .unwrap();
@@ -42,6 +43,7 @@ fn service_tree_can_place_apps_and_groups_at_category_or_group_level() {
             parent_id: Some(group.id.clone()),
             source_path: "https://example.com/child".to_owned(),
             name: Some("子网址".to_owned()),
+            root_index: None,
         },
     )
     .unwrap();

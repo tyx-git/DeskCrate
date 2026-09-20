@@ -141,9 +141,18 @@ impl JsonStore {
     // 与配置相反：data.json 是用户自己攒的分类和应用，静默换一份空的会看起来像
     // 「数据全没了」，比报错严重得多。副本用**复制**而不是改名 —— 原文件必须留在
     // 原位，是删掉还是修好由用户决定。
+    // 读取目录数据，并在必要时把旧版结构折成当前形状。
+    //
+    // 根节点曾经是「顶层应用一个数组 + 分类一个数组、应用固定在前」，现在是
+    // 一个可交错的有序列表。`AppData::normalize()` 负责这个转换且是幂等的，
+    // 所以放在这里最合适 —— 无论从哪条路径读（`load` 还是 `mutate`），业务层
+    // 拿到的都只会是同一种形状。
     fn read_data_or_report(&self) -> AppResult<AppData> {
-        match Self::read_json(&self.data_path) {
-            Ok(data) => Ok(data),
+        match Self::read_json::<AppData>(&self.data_path) {
+            Ok(mut data) => {
+                data.normalize();
+                Ok(data)
+            }
             Err(error) if is_corrupt_json(&error) => {
                 let backup = copy_aside(&self.data_path)?;
                 log::warn!(

@@ -82,7 +82,8 @@ fn catalog_and_settings_commands_use_the_documented_ipc_shape() {
     assert!(category["groups"].as_array().unwrap().is_empty());
 
     let all_data = invoke(&window, "get_all_data", json!({}));
-    assert_eq!(all_data["categories"][0]["id"], category_id);
+    // 根节点是有序的 `items` 数组：分类与顶层应用混排。
+    assert_eq!(all_data["items"][0]["Category"]["id"], category_id);
 
     let group = invoke(
         &window,

@@ -65,12 +65,14 @@ pub fn delete_group(id: String, state: tauri::State<'_, AppState>) -> AppResult<
 
 // 添加应用或快捷方式；图标和快捷方式字段由服务层自动解析。
 //
-// `parent_id` 传 `null` 表示直接放到顶层，不进任何分类。
+// `parent_id` 传 `null` 表示直接放到顶层（此时 `rootIndex` 指定插到第几个
+// 根节点之前，省略则追加到最下方）；放进分类或分组时忽略 `rootIndex`。
 #[tauri::command]
 pub fn add_app(
     parent_id: Option<String>,
     source_path: String,
     name: Option<String>,
+    root_index: Option<usize>,
     state: tauri::State<'_, AppState>,
 ) -> AppResult<AppEXE> {
     services::catalog::add_app(
@@ -79,6 +81,7 @@ pub fn add_app(
             parent_id,
             source_path,
             name,
+            root_index,
         },
     )
 }

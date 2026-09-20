@@ -1,6 +1,6 @@
 import { useCallback, useRef, type CSSProperties } from 'react'
 
-import { useFileDrop } from '../../hooks/useFileDrop'
+import { useFileDrop, type DropTarget } from '../../hooks/useFileDrop'
 import { useAutoCollapse } from '../../hooks/useAutoCollapse'
 import { useHotkeys } from '../../hooks/useHotkeys'
 import { ROOT_ID } from '../../lib/tree'
@@ -38,19 +38,20 @@ export function SidebarShell() {
   useHotkeys()
 
   const handleDropPaths = useCallback(
-    (paths: string[], targetId: string | null) => {
-      if (!targetId) {
-        notify('info', '请把文件或文件夹拖到顶层，或拖到具体的分类、分组上')
-        return
-      }
-
-      // 顶层没有对应的后端节点，`parentId` 用 `null` 表达。
-      const parentId = targetId === ROOT_ID ? null : targetId
+    (paths: string[], target: DropTarget) => {
+      // 命中分界线 → 作为顶层应用插到那个位置；命中分类/分组行 → 放进该容器。
+      // 顶层没有对应的后端节点，`parentId` 用 `null` 表达，位置交给 `rootIndex`。
+      const parentId = target.index !== null
+        ? null
+        : target.id === null || target.id === ROOT_ID
+          ? null
+          : target.id
+      const rootIndex = target.index
 
       void (async () => {
         let added = 0
         for (const path of paths) {
-          const created = await addApp(parentId, path)
+          const created = await addApp(parentId, path, undefined, rootIndex ?? undefined)
           if (created) {
             added += 1
           }
@@ -63,7 +64,7 @@ export function SidebarShell() {
     [addApp, notify],
   )
 
-  const { isDragging, activeDropId } = useFileDrop(handleDropPaths)
+  const { isDragging, activeDropId, activeDropIndex } = useFileDrop(handleDropPaths)
 
   return (
     <div
@@ -95,7 +96,11 @@ export function SidebarShell() {
             ref={panelRef}
             className={`dc-stage ${stageConverged ? 'dc-stage--converged' : ''}`}
           >
-            <Sidebar activeDropId={activeDropId} isDragging={isDragging} />
+            <Sidebar
+              activeDropId={activeDropId}
+              activeDropIndex={activeDropIndex}
+              isDragging={isDragging}
+            />
             {/* 收束时从面板顶部扫到底部的光带，被一起夹进细丝里。 */}
             <span aria-hidden className="dc-sweep" />
           </div>

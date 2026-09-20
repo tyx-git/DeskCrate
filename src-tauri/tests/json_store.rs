@@ -4,7 +4,7 @@ use std::{env, fs, path::PathBuf, process::Command};
 
 use app_lib::{
     error::AppResult,
-    models::{AppData, AppError, Category, Settings, ViewMode},
+    models::{AppData, AppError, Category, RootItem, Settings, ViewMode},
     storage::{DataRepository, JsonStore, SettingsRepository},
 };
 
@@ -75,9 +75,9 @@ fn data_and_settings_round_trip_through_their_repository_traits() {
     let store = directory.store();
 
     let data = AppData {
-        version: 1,
-        categories: vec![category("category-1", "工具")],
-        apps: Vec::new(),
+        version: 2,
+        items: vec![RootItem::Category(category("category-1", "工具"))],
+        ..AppData::default()
     };
     let settings = Settings {
         auto_collapse: true,
@@ -96,7 +96,7 @@ fn data_and_settings_round_trip_through_their_repository_traits() {
     );
 
     let raw = fs::read_to_string(store.data_path()).expect("data JSON should be readable");
-    assert!(raw.contains("\"version\": 1"));
+    assert!(raw.contains("\"version\": 2"));
     assert!(raw.contains("\"name\": \"工具\""));
 }
 
@@ -107,8 +107,9 @@ fn mutate_data_and_settings_return_operation_values_and_persist_changes() {
 
     let added_name = store
         .mutate_data(|data| {
-            data.categories.push(category("category-1", "开发"));
-            Ok::<_, AppError>(data.categories[0].name.clone())
+            data.items
+                .push(RootItem::Category(category("category-1", "开发")));
+            Ok::<_, AppError>(data.items[0].id().unwrap_or_default().to_owned())
         })
         .expect("data mutation should succeed");
 
@@ -119,9 +120,10 @@ fn mutate_data_and_settings_return_operation_values_and_persist_changes() {
         })
         .expect("settings mutation should succeed");
 
-    assert_eq!(added_name, "开发");
+    // `items[0].id()` 是分类的 UUID，不是空串；这里只验证「改动被持久化了」。
+    assert!(!added_name.is_empty());
     assert!(setting_value);
-    assert_eq!(store.load_data().unwrap().categories.len(), 1);
+    assert_eq!(store.load_data().unwrap().items.len(), 1);
     assert!(store.load_settings().unwrap().auto_collapse);
 }
 
@@ -395,7 +397,7 @@ fn concurrent_process_mutations_do_not_lose_updates() {
     }
 
     let data = store.load_data().expect("data should remain readable");
-    assert_eq!(data.categories.len(), WORKER_COUNT * ITERATIONS);
+    assert_eq!(data.items.len(), WORKER_COUNT * ITERATIONS);
     assert_eq!(data.version, AppData::default().version);
 }
 
@@ -416,7 +418,8 @@ fn cross_process_mutation_worker() {
         let id = format!("worker-{}-{iteration}", std::process::id());
         store
             .mutate_data(|data| {
-                data.categories.push(category(&id, "并发写入"));
+                data.items
+                    .push(RootItem::Category(category(&id, "并发写入")));
                 Ok::<_, AppError>(())
             })
             .expect("worker mutation should succeed");

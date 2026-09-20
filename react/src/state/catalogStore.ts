@@ -2,7 +2,9 @@ import { create } from 'zustand'
 
 import { backend, describeError, toAppError } from '../api'
 import { readCollapseMap, writeCollapse } from '../lib/collapseStorage'
-import type { AppData, AppEXE, Category, Group, Item } from '../types/catalog'
+import { insertRootApp, removeRootApp } from '../lib/tree'
+import { isAppsRoot } from '../types/catalog'
+import type { AppData, AppEXE, Category, Group, Item, RootItem } from '../types/catalog'
 import type { AppError } from '../types/error'
 import { useUiStore } from './uiStore'
 
@@ -23,11 +25,15 @@ interface CatalogState {
   renameGroup: (id: string, name: string) => Promise<boolean>
   deleteGroup: (id: string) => Promise<boolean>
 
-  /** `parentId` 为 `null` 时直接放到顶层。 */
+  /**
+   * `parentId` 为 `null` 时放到顶层，`rootIndex` 指定插到第几个根节点之前
+   * （省略则追加到最下方）；放进分类或分组时忽略 `rootIndex`。
+   */
   addApp: (
     parentId: string | null,
     sourcePath: string,
     name?: string,
+    rootIndex?: number,
   ) => Promise<AppEXE | null>
   renameApp: (id: string, name: string) => Promise<boolean>
   deleteApp: (id: string) => Promise<boolean>
@@ -36,7 +42,7 @@ interface CatalogState {
   toggleCollapse: (id: string, isCollapsed: boolean) => void
 }
 
-const EMPTY: AppData = { version: 1, categories: [], apps: [] }
+const EMPTY: AppData = { version: 2, items: [] }
 
 export const useCatalogStore = create<CatalogState>((set, get) => ({
   data: EMPTY,
@@ -58,7 +64,7 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     return run(set, get, null, async () => {
       const category = await backend.addCategory(name)
       set((state) => ({
-        data: { ...state.data, categories: [...state.data.categories, category] },
+        data: { ...state.data, items: [...state.data.items, { Category: category }] },
       }))
       return category
     })
@@ -68,12 +74,7 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     return run(set, get, false, async () => {
       const updated = await backend.renameCategory(id, name)
       set((state) => ({
-        data: {
-          ...state.data,
-          categories: state.data.categories.map((category) =>
-            category.id === id ? { ...category, name: updated.name } : category,
-          ),
-        },
+        data: { ...state.data, items: mapCategories(state.data.items, id, (category) => ({ ...category, name: updated.name })) },
       }))
       return true
     })
@@ -85,7 +86,9 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
       set((state) => ({
         data: {
           ...state.data,
-          categories: state.data.categories.filter((category) => category.id !== id),
+          items: state.data.items.filter(
+            (item) => !('Category' in item && item.Category.id === id),
+          ),
         },
       }))
       return true
@@ -96,10 +99,7 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     return run(set, get, null, async () => {
       const group = await backend.addGroup(parentId, name)
       set((state) => ({
-        data: {
-          ...state.data,
-          categories: appendToParent(state.data.categories, parentId, { Group: group }),
-        },
+        data: { ...state.data, items: appendToParent(state.data.items, parentId, { Group: group }) },
       }))
       return group
     })
@@ -111,7 +111,7 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
       set((state) => ({
         data: {
           ...state.data,
-          categories: state.data.categories.map((category) => ({
+          items: mapCategoryChildren(state.data.items, (category) => ({
             ...category,
             groups: renameInItems(category.groups, id, updated.name),
           })),
@@ -127,7 +127,7 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
       set((state) => ({
         data: {
           ...state.data,
-          categories: state.data.categories.map((category) => ({
+          items: mapCategoryChildren(state.data.items, (category) => ({
             ...category,
             groups: removeNode(category.groups, id),
           })),
@@ -137,19 +137,17 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     })
   },
 
-  async addApp(parentId, sourcePath, name) {
+  async addApp(parentId, sourcePath, name, rootIndex) {
     return run(set, get, null, async () => {
-      const app = await backend.addApp(parentId, sourcePath, name)
+      const app = await backend.addApp(parentId, sourcePath, name, rootIndex)
       set((state) => ({
-        data:
-          parentId === null
-            ? { ...state.data, apps: [...state.data.apps, app] }
-            : {
-                ...state.data,
-                categories: appendToParent(state.data.categories, parentId, {
-                  App: app,
-                }),
-              },
+        data: {
+          ...state.data,
+          items:
+            parentId === null
+              ? insertRootApp(state.data.items, app, rootIndex ?? Number.MAX_SAFE_INTEGER)
+              : appendToParent(state.data.items, parentId, { App: app }),
+        },
       }))
       return app
     })
@@ -163,11 +161,14 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
       set((state) => ({
         data: {
           ...state.data,
-          apps: state.data.apps.map(rename),
-          categories: state.data.categories.map((category) => ({
-            ...category,
-            groups: renameInItems(category.groups, id, updated.name),
-          })),
+          items: state.data.items.map((item) => {
+            if (isAppsRoot(item)) {
+              return { Apps: item.Apps.map(rename) }
+            }
+            return {
+              Category: { ...item.Category, groups: renameInItems(item.Category.groups, id, updated.name) },
+            }
+          }),
         },
       }))
       return true
@@ -178,14 +179,7 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     return run(set, get, false, async () => {
       await backend.deleteApp(id)
       set((state) => ({
-        data: {
-          ...state.data,
-          apps: state.data.apps.filter((app) => app.id !== id),
-          categories: state.data.categories.map((category) => ({
-            ...category,
-            groups: removeNode(category.groups, id),
-          })),
-        },
+        data: { ...state.data, items: removeRootApp(state.data.items, id) },
       }))
       return true
     })
@@ -206,19 +200,47 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     set((state) => ({
       data: {
         ...state.data,
-        categories: state.data.categories.map((category) => {
+        items: state.data.items.map((item) => {
+          if (!('Category' in item)) {
+            return item
+          }
+          const category = item.Category
           if (category.id === id) {
-            return { ...category, isCollapsed }
+            return { Category: { ...category, isCollapsed } }
           }
           return {
-            ...category,
-            groups: collapseInItems(category.groups, id, isCollapsed),
+            Category: {
+              ...category,
+              groups: collapseInItems(category.groups, id, isCollapsed),
+            },
           }
         }),
       },
     }))
   },
 }))
+
+/** 只改动根节点上 id 命中的那一个分类。 */
+function mapCategories(
+  items: RootItem[],
+  id: string,
+  update: (category: Category) => Category,
+): RootItem[] {
+  return items.map((item) =>
+    'Category' in item && item.Category.id === id
+      ? { Category: update(item.Category) }
+      : item,
+  )
+}
+
+/** 对根节点上每一个分类的 groups 做同样的变换。 */
+function mapCategoryChildren(
+  items: RootItem[],
+  update: (category: Category) => Category,
+): RootItem[] {
+  return items.map((item) => ('Category' in item ? { Category: update(item.Category) } : item))
+}
+
 
 /**
  * 统一的写操作外壳：置忙、捕获后端错误并转成提示，失败时返回 `fallback`。
@@ -256,11 +278,17 @@ function applyCollapseOverrides(data: AppData): AppData {
 
   return {
     ...data,
-    categories: data.categories.map((category) => ({
-      ...category,
-      isCollapsed: overrides[category.id] ?? category.isCollapsed,
-      groups: applyToItems(category.groups, overrides),
-    })),
+    items: data.items.map((item) =>
+      'Category' in item
+        ? {
+            Category: {
+              ...item.Category,
+              isCollapsed: overrides[item.Category.id] ?? item.Category.isCollapsed,
+              groups: applyToItems(item.Category.groups, overrides),
+            },
+          }
+        : item,
+    ),
   }
 }
 
@@ -325,16 +353,20 @@ function collapseInItems(items: Item[], id: string, isCollapsed: boolean): Item[
  *
  * 父节点若处于折叠状态就一并展开，否则新增的条目会被折叠起来，看起来像没加上。
  */
-function appendToParent(
-  categories: Category[],
-  parentId: string,
-  child: Item,
-): Category[] {
-  return categories.map((category) =>
-    category.id === parentId
-      ? { ...category, isCollapsed: false, groups: [...category.groups, child] }
-      : { ...category, groups: appendChild(category.groups, parentId, child) },
-  )
+function appendToParent(roots: RootItem[], parentId: string, child: Item): RootItem[] {
+  return roots.map((item) => {
+    // 顶层应用那一行不能当容器，原样放过。
+    if (!('Category' in item)) {
+      return item
+    }
+
+    const category = item.Category
+    return category.id === parentId
+      ? {
+          Category: { ...category, isCollapsed: false, groups: [...category.groups, child] },
+        }
+      : { Category: { ...category, groups: appendChild(category.groups, parentId, child) } }
+  })
 }
 
 /** 把新节点追加到指定分组的子节点下；父分组不存在时保持原样。 */

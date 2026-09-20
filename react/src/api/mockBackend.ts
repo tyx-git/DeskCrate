@@ -1,10 +1,14 @@
-import type {
-  AppData,
-  AppEXE,
-  Category,
-  Group,
-  IconType,
-  Item,
+import { insertRootApp, rootApps, rootCategories } from '../lib/tree'
+import {
+  isAppsRoot,
+  isCategoryRoot,
+  type AppData,
+  type AppEXE,
+  type Category,
+  type Group,
+  type IconType,
+  type Item,
+  type RootItem,
 } from '../types/catalog'
 import type { CssSize, Settings, ViewMode, WindowInitResponse, WindowSize } from '../types/settings'
 import type { Backend } from './backend'
@@ -62,17 +66,21 @@ function seedData(): AppData {
     name: string,
     groups: Item[],
     isCollapsed = false,
-  ): Category => ({ id, name, isCollapsed, groups, createdTime: now })
+  ): RootItem => ({
+    Category: { id, name, isCollapsed, groups, createdTime: now },
+  })
 
   return {
-    version: 1,
-    // 顶层应用：最常用的那几个，不必为了放它们先建一个分类。
-    apps: [
-      appEXE('app-root-explorer', '此电脑', 'C:\\Windows\\explorer.exe', 'Folder', '🖥️'),
-      appEXE('app-root-github', 'GitHub', 'https://github.com', 'Url', '🐙'),
-      appEXE('app-root-terminal', '终端', 'C:\\Windows\\System32\\cmd.exe', 'Executable', '⌨️'),
-    ],
-    categories: [
+    version: 2,
+    items: [
+      // 顶层应用与分类交错排列，顺序就是屏幕上的顺序。
+      {
+        Apps: [
+          appEXE('app-root-explorer', '此电脑', 'C:\\Windows\\explorer.exe', 'Folder', '🖥️'),
+          appEXE('app-root-github', 'GitHub', 'https://github.com', 'Url', '🐙'),
+          appEXE('app-root-terminal', '终端', 'C:\\Windows\\System32\\cmd.exe', 'Executable', '⌨️'),
+        ],
+      },
       category('cat-common', '常用', [
         app('app-chrome', 'Chrome', 'https://www.google.com', 'Url', '🌐'),
         app('app-firefox', 'Firefox', 'https://www.mozilla.org', 'Url', '🦊'),
@@ -150,13 +158,27 @@ function previewWindowSize(viewMode: ViewMode, override: CssSize | null): Window
 }
 
 /**
- * 补上顶层应用数组。
+ * 把旧版预览存档折成当前的根节点形状。
  *
- * 预览数据存在 localStorage 里，旧版本的存档没有 `apps` 字段；后端靠
- * `serde(default)` 兜住了同样的问题，这里必须照做，否则预览会直接崩。
+ * 浏览器预览的数据存在 localStorage 里，旧存档是「`apps` + `categories`」两个
+ * 数组；后端靠 `AppData::normalize()` 兜同样的兼容性，这里必须照做，否则预览
+ * 会直接崩。
  */
-function withTopLevelApps(data: AppData): AppData {
-  return Array.isArray(data.apps) ? data : { ...data, apps: [] }
+function normalizeData(data: AppData): AppData {
+  if (Array.isArray(data.items)) {
+    return data
+  }
+
+  const legacy = data as unknown as { categories?: Category[]; apps?: AppEXE[] }
+  const items: RootItem[] = []
+  if (legacy.apps && legacy.apps.length > 0) {
+    items.push({ Apps: legacy.apps })
+  }
+  for (const category of legacy.categories ?? []) {
+    items.push({ Category: category })
+  }
+
+  return { version: 2, items }
 }
 
 function readJson<T>(key: string, fallback: T): T {
@@ -200,7 +222,7 @@ class MockBackend implements Backend {
   private settings: Settings
 
   constructor() {
-    this.data = withTopLevelApps(readJson(STORAGE_KEY, seedData()))
+    this.data = normalizeData(readJson(STORAGE_KEY, seedData()))
     this.settings = readJson(SETTINGS_KEY, defaultSettings())
   }
 
@@ -210,6 +232,27 @@ class MockBackend implements Backend {
 
   private persistSettings(): void {
     writeJson(SETTINGS_KEY, this.settings)
+  }
+
+  /** 根节点上的所有分类（就地引用，可直接改）。 */
+  private categories(): Category[] {
+    return this.data.items.flatMap((item) => (isCategoryRoot(item) ? [item.Category] : []))
+  }
+
+  /** 根节点上的所有顶层应用（就地引用）。 */
+  private topLevelApps(): AppEXE[] {
+    return this.data.items.flatMap((item) => (isAppsRoot(item) ? item.Apps : []))
+  }
+
+  /** 删除一个顶层应用，删空的那一行一并摘掉。 */
+  private removeTopLevelApp(id: string): void {
+    this.data.items = this.data.items
+      .map((item) =>
+        isAppsRoot(item)
+          ? { Apps: item.Apps.filter((app) => app.id !== id) }
+          : item,
+      )
+      .filter((item) => !isAppsRoot(item) || item.Apps.length > 0)
   }
 
   /** 在整棵树里就地替换某个节点，返回是否命中。 */
@@ -310,14 +353,14 @@ class MockBackend implements Backend {
       groups: [],
       createdTime: new Date().toISOString(),
     }
-    this.data.categories.push(category)
+    this.data.items.push({ Category: category })
     this.persistData()
     return structuredClone(category)
   }
 
   async renameCategory(id: string, name: string): Promise<Category> {
     await delay()
-    const category = this.data.categories.find((item) => item.id === id)
+    const category = this.categories().find((item) => item.id === id)
     if (!category) {
       throw { code: 'category_not_found', message: `找不到分类: ${id}` }
     }
@@ -328,11 +371,11 @@ class MockBackend implements Backend {
 
   async deleteCategory(id: string): Promise<void> {
     await delay()
-    const index = this.data.categories.findIndex((item) => item.id === id)
+    const index = this.data.items.findIndex((item) => isCategoryRoot(item) && item.Category.id === id)
     if (index < 0) {
       throw { code: 'category_not_found', message: `找不到分类: ${id}` }
     }
-    this.data.categories.splice(index, 1)
+    this.data.items.splice(index, 1)
     this.persistData()
   }
 
@@ -346,7 +389,7 @@ class MockBackend implements Backend {
       createdTime: new Date().toISOString(),
     }
 
-    const category = this.data.categories.find((item) => item.id === parentId)
+    const category = this.categories().find((item) => item.id === parentId)
     if (category) {
       category.groups.push({ Group: group })
       this.persistData()
@@ -354,12 +397,11 @@ class MockBackend implements Backend {
     }
 
     let attached = false
-    for (const item of this.data.categories) {
-      const next = this.mapGroups(item.groups, parentId, (parent) => {
+    for (const category of this.categories()) {
+      category.groups = this.mapGroups(category.groups, parentId, (parent) => {
         attached = true
         return { ...parent, children: [...parent.children, { Group: group }] }
       })
-      item.groups = next
       if (attached) {
         break
       }
@@ -378,7 +420,7 @@ class MockBackend implements Backend {
     const renamed = normalizeName(name, '分组')
     let result: Group | null = null
 
-    for (const category of this.data.categories) {
+    for (const category of this.categories()) {
       category.groups = this.mapGroups(category.groups, id, (group) => {
         result = { ...group, name: renamed }
         return result
@@ -397,7 +439,7 @@ class MockBackend implements Backend {
     await delay()
     let removed = false
 
-    for (const category of this.data.categories) {
+    for (const category of this.categories()) {
       category.groups = this.mapGroups(category.groups, id, () => {
         removed = true
         return null
@@ -415,6 +457,7 @@ class MockBackend implements Backend {
     parentId: string | null,
     sourcePath: string,
     name?: string,
+    rootIndex?: number,
   ): Promise<AppEXE> {
     await delay()
     const path = sourcePath.trim()
@@ -431,14 +474,14 @@ class MockBackend implements Backend {
       createdTime: new Date().toISOString(),
     }
 
-    // 与后端一致：`null` 表示放到顶层，不进任何分类。
+    // 与后端一致：`null` 表示放到顶层，按 `rootIndex` 插到指定位置。
     if (parentId === null) {
-      this.data.apps.push(app)
+      this.data.items = insertRootApp(this.data.items, app, rootIndex ?? Number.MAX_SAFE_INTEGER)
       this.persistData()
       return structuredClone(app)
     }
 
-    const category = this.data.categories.find((item) => item.id === parentId)
+    const category = this.categories().find((item) => item.id === parentId)
     if (category) {
       category.groups.push({ App: app })
       this.persistData()
@@ -446,8 +489,8 @@ class MockBackend implements Backend {
     }
 
     let attached = false
-    for (const item of this.data.categories) {
-      item.groups = this.mapGroups(item.groups, parentId, (group) => {
+    for (const category of this.categories()) {
+      category.groups = this.mapGroups(category.groups, parentId, (group) => {
         attached = true
         return { ...group, children: [...group.children, { App: app }] }
       })
@@ -469,13 +512,13 @@ class MockBackend implements Backend {
     const renamed = normalizeName(name, '应用')
     let result: AppEXE | null = null
 
-    const root = this.data.apps.find((app) => app.id === id)
+    const root = this.topLevelApps().find((app) => app.id === id)
     if (root) {
       root.name = renamed
       result = root
     }
 
-    for (const category of this.data.categories) {
+    for (const category of this.categories()) {
       category.groups = this.replaceItem(category.groups, id, (app) => {
         result = { ...app, name: renamed }
         return result
@@ -494,13 +537,13 @@ class MockBackend implements Backend {
     await delay()
     let removed = false
 
-    const index = this.data.apps.findIndex((app) => app.id === id)
+    const index = this.topLevelApps().findIndex((app) => app.id === id)
     if (index >= 0) {
-      this.data.apps.splice(index, 1)
+      this.removeTopLevelApp(id)
       removed = true
     }
 
-    for (const category of this.data.categories) {
+    for (const category of this.categories()) {
       category.groups = this.replaceItem(category.groups, id, () => {
         removed = true
         return null
@@ -525,7 +568,7 @@ class MockBackend implements Backend {
 }
 
 function findAppInTree(data: AppData, id: string): AppEXE | null {
-  const root = data.apps.find((app) => app.id === id)
+  const root = rootApps(data).find((app) => app.id === id)
   if (root) {
     return root
   }
@@ -546,7 +589,7 @@ function findAppInTree(data: AppData, id: string): AppEXE | null {
     return null
   }
 
-  for (const category of data.categories) {
+  for (const category of rootCategories(data)) {
     const found = walk(category.groups)
     if (found) {
       return found

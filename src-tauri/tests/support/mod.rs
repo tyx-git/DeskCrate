@@ -68,10 +68,9 @@ impl Drop for TestDir {
     }
 }
 
-/// 在数据树中按 ID 查找任意节点。
+/// 在数据树中按 ID 查找任意节点（只找分类/分组内部，不含顶层应用）。
 pub fn find_item<'a>(data: &'a AppData, id: &str) -> Option<&'a Item> {
-    data.categories
-        .iter()
+    data.root_categories()
         .flat_map(|category| category.groups.iter())
         .find_map(|item| find_item_in_item(item, id))
 }
@@ -89,7 +88,7 @@ fn find_item_in_item<'a>(item: &'a Item, id: &str) -> Option<&'a Item> {
 }
 
 pub fn find_category<'a>(data: &'a AppData, id: &str) -> Option<&'a Category> {
-    data.categories.iter().find(|category| category.id == id)
+    data.root_categories().find(|category| category.id == id)
 }
 
 pub fn find_group<'a>(data: &'a AppData, id: &str) -> Option<&'a Group> {
@@ -99,10 +98,10 @@ pub fn find_group<'a>(data: &'a AppData, id: &str) -> Option<&'a Group> {
     })
 }
 
-// 顶层应用不在任何分类下，单独先看一遍；`find_item` 只走分类树，
-// 少这一步的话「放在顶层」的应用在测试里会表现为找不到。
+// 顶层应用就在根节点上，`find_app` 只需按显示顺序扫一遍即可 —— `find_item`
+// 只走分类内部，扫不到它们。
 pub fn find_app<'a>(data: &'a AppData, id: &str) -> Option<&'a AppEXE> {
-    data.apps.iter().find(|app| app.id == id).or_else(|| {
+    data.root_apps().find(|app| app.id == id).or_else(|| {
         find_item(data, id).and_then(|item| match item {
             Item::App(app) => Some(app),
             Item::Group(_) => None,
@@ -111,10 +110,9 @@ pub fn find_app<'a>(data: &'a AppData, id: &str) -> Option<&'a AppEXE> {
 }
 
 pub fn count_apps(data: &AppData) -> usize {
-    data.apps.len()
+    data.root_apps().count()
         + data
-            .categories
-            .iter()
+            .root_categories()
             .flat_map(|category| category.groups.iter())
             .map(count_apps_in_item)
             .sum::<usize>()
