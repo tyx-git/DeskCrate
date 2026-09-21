@@ -55,4 +55,14 @@ export interface Backend {
   renameApp(id: string, name: string): Promise<AppEXE>
   deleteApp(id: string): Promise<void>
   launchIcon(id: string): Promise<void>
+
+  /**
+   * 后台补抓到网址图标时触发，返回取消监听的函数。
+   *
+   * 添加网址时图标是**后补**的：抓取可能要几秒甚至更久，同步等会把「添加一个
+   * 网址」卡住十几秒。应用先用内置图标落库，抓到之后后端发事件，前端再替换。
+   */
+  onIconReady(
+    listener: (payload: { appId: string; iconUrl: string }) => void,
+  ): Promise<() => void>
 }

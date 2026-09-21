@@ -10,6 +10,7 @@ fn settings_default_matches_the_first_launch_policy() {
     assert_eq!(settings.theme, Theme::Default);
     assert_eq!(settings.view_mode, ViewMode::Expanded);
     assert!(!settings.auto_collapse);
+    assert!(!settings.auto_start);
     assert!(!settings.window.is_initialized);
     assert_eq!(settings.window.position, None);
     assert_eq!(settings.window.size, None);

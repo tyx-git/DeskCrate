@@ -138,8 +138,7 @@ impl IconExtractor {
     fn write_image(&self, app_id: &str, image: RgbaImage) -> AppResult<IconExtractionResult> {
         std::fs::create_dir_all(&self.icons_dir)?;
 
-        let file_name = format!("{app_id}.png");
-        let cache_path = self.icons_dir.join(&file_name);
+        let cache_path = self.icon_path(app_id);
         image.save(&cache_path).map_err(|error| {
             AppError::new(
                 "icon_save_failed",
@@ -148,6 +147,92 @@ impl IconExtractor {
         })?;
 
         Ok(IconExtractionResult { cache_path })
+    }
+
+    // 图标缓存文件的约定路径。
+    //
+    // 文件名固定为 `{app_id}.png`（与 `write_image` 一致）。清理和孤儿对账都靠这个
+    // 约定按 ID 找文件，因此不能改成信任 JSON 里可能被改过的路径。
+    fn icon_path(&self, app_id: &str) -> PathBuf {
+        self.icon_path_with_extension(app_id, "png")
+    }
+
+    fn icon_path_with_extension(&self, app_id: &str, extension: &str) -> PathBuf {
+        self.icons_dir.join(format!("{app_id}.{extension}"))
+    }
+
+    // 保存 SVG 原文。
+    //
+    // `image` crate 不支持 SVG，但 WebView 的 `<img>` 原生能渲染，而且矢量在
+    // 44px 的格子里比位图还清楚。所以 SVG 不解码，直接把字节按 `.svg` 落盘。
+    pub(crate) fn save_svg(&self, app_id: &str, bytes: &[u8]) -> AppResult<IconExtractionResult> {
+        validate_app_id(app_id)?;
+        std::fs::create_dir_all(&self.icons_dir)?;
+
+        let cache_path = self.icon_path_with_extension(app_id, "svg");
+        std::fs::write(&cache_path, bytes).map_err(|error| {
+            AppError::new(
+                "icon_save_failed",
+                format!("无法保存图标 {}: {error}", cache_path.display()),
+            )
+        })?;
+
+        Ok(IconExtractionResult { cache_path })
+    }
+
+    // 找到 `app_id` 已有的图标缓存，返回路径和扩展名。
+    //
+    // 网址图标的产物可能是 png（位图解出来了）也可能是 svg（原文落盘），所以两个
+    // 扩展名都要认。png 优先：历史数据全是 png，先找它少一次系统调用。
+    fn find_icon_cache(&self, app_id: &str) -> Option<(PathBuf, &'static str)> {
+        for extension in ["png", "svg"] {
+            let path = self.icon_path_with_extension(app_id, extension);
+            if path.is_file() {
+                return Some((path, extension));
+            }
+        }
+
+        None
+    }
+
+    // 把另一个应用的图标缓存复制成 `app_id` 的一份。
+    //
+    // 同源站点第二次添加时走这条路：不联网就拿到图标，而且同一站点在侧栏里长得
+    // 必然一样（各抓各的会因为重试时机不同而拿到不同尺寸的图）。
+    //
+    // 是**复制**而不是共用同一份文件：每个应用各自持有自己的一份，删掉其中一个
+    // 不会让另一个变成裂图，`remove_app_icon` / `sweep_orphan_icons` 那套按 ID
+    // 找文件的约定也不用改。
+    pub(crate) fn copy_icon(
+        &self,
+        source_app_id: &str,
+        app_id: &str,
+    ) -> AppResult<IconExtractionResult> {
+        validate_app_id(source_app_id)?;
+        validate_app_id(app_id)?;
+
+        let (source, extension) = self.find_icon_cache(source_app_id).ok_or_else(|| {
+            AppError::new(
+                "icon_cache_missing",
+                format!(
+                    "{} 没有可复用的图标缓存",
+                    self.icons_dir.join(source_app_id).display()
+                ),
+            )
+        })?;
+
+        std::fs::create_dir_all(&self.icons_dir)?;
+        // 扩展名跟着来源一起带过去：源是 svg，复制过来也必须是 svg，否则前端
+        // 拿到的 `icon_url` 会指向一个内容与扩展名不符的文件。
+        let target = self.icon_path_with_extension(app_id, extension);
+        std::fs::copy(&source, &target).map_err(|error| {
+            AppError::new(
+                "icon_copy_failed",
+                format!("无法复用图标到 {}: {error}", target.display()),
+            )
+        })?;
+
+        Ok(IconExtractionResult { cache_path: target })
     }
 }
 

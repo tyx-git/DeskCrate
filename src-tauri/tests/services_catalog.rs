@@ -4,10 +4,11 @@ use std::fs;
 
 use app_lib::{
     models::{
-        AddAppRequest, AddCategoryRequest, AddGroupRequest, Category, DeleteRequest, IconType,
-        Item, MoveAppRequest, RenameRequest, RootItem,
+        AddAppRequest, AddCategoryRequest, AddGroupRequest, AppData, AppEXE, Category,
+        DeleteRequest, IconType, Item, MoveAppRequest, RenameRequest, RootItem,
     },
     services::catalog,
+    state::AppState,
     storage::{DataRepository, JsonStore},
 };
 
@@ -387,20 +388,26 @@ fn orphan_icon_sweep_removes_only_unreferenced_uuid_files() {
     let referenced = directory.child(&format!("icons/{}.png", app.id));
     assert!(referenced.is_file(), "应用图标应已缓存");
 
-    // 伪造三种文件：真正的孤儿、非 UUID 命名、以及非 PNG 扩展名。
+    // 伪造四种文件：真正的 PNG/SVG 孤儿、非 UUID 命名、以及非图标扩展名。
     // 后两种不是本程序写的，对账必须放过它们。
     let orphan_name = "11111111-2222-3333-4444-555555555555.png";
+    let orphan_svg_name = "11111111-2222-3333-4444-666666666666.svg";
     let orphan = directory.child(&format!("icons/{orphan_name}"));
+    let orphan_svg = directory.child(&format!("icons/{orphan_svg_name}"));
     let foreign = directory.child("icons/readme.png");
     let other = directory.child("icons/notes.txt");
-    for path in [&orphan, &foreign, &other] {
+    for path in [&orphan, &orphan_svg, &foreign, &other] {
         fs::write(path, b"fixture").expect("fixture should be written");
     }
 
     let removed = catalog::sweep_orphan_icons(&state).unwrap();
 
-    assert_eq!(removed, vec![orphan_name.to_owned()]);
-    assert!(!orphan.exists(), "未被引用的 UUID 图标应被清理");
+    assert_eq!(
+        removed,
+        vec![orphan_name.to_owned(), orphan_svg_name.to_owned()]
+    );
+    assert!(!orphan.exists(), "未被引用的 UUID PNG 图标应被清理");
+    assert!(!orphan_svg.exists(), "未被引用的 UUID SVG 图标应被清理");
     assert!(referenced.is_file(), "仍被应用引用的图标不能删");
     assert!(foreign.exists(), "非 UUID 命名的文件不能删");
     assert!(other.exists(), "非 PNG 文件不能删");
@@ -824,6 +831,59 @@ fn moving_an_unknown_app_reports_not_found() {
 }
 
 #[test]
+fn adding_a_url_app_does_not_wait_for_the_icon() {
+    let directory = TestDir::new("add-url-no-wait");
+    let state = directory.state();
+
+    // 抓取是几秒量级的网络操作（实测最慢 18 秒），添加网址不该等它。
+    // 这里用一个必然抓不到的站点，确保「返回得快」不是因为抓到了什么。
+    let started = std::time::Instant::now();
+    let app = catalog::add_app(
+        &state,
+        AddAppRequest {
+            parent_id: None,
+            source_path: "https://icon.invalid.example".to_owned(),
+            name: Some("慢站点".to_owned()),
+            root_index: None,
+        },
+    )
+    .expect("url app should be added");
+    let elapsed = started.elapsed();
+
+    assert_eq!(app.icon_type, IconType::Url, "网址应用仍是 Url 类型");
+    assert!(
+        elapsed.as_secs() < 3,
+        "添加网址应当立刻返回，实测耗时 {:?}",
+        elapsed
+    );
+}
+
+#[test]
+fn refresh_url_icon_only_touches_url_apps_still_using_the_placeholder() {
+    let directory = TestDir::new("refresh-url-icon");
+    let state = directory.state();
+
+    // 本地应用不参与补抓。
+    let local = catalog::add_app(
+        &state,
+        AddAppRequest {
+            parent_id: None,
+            source_path: directory.path().to_string_lossy().into_owned(),
+            name: Some("本地".to_owned()),
+            root_index: None,
+        },
+    )
+    .expect("local app should be added");
+    assert!(catalog::refresh_url_icon(&state, &local.id)
+        .expect("不应报错")
+        .is_none());
+
+    // 未知 ID 要明确报错，方便调用方区分「没抓到」和「根本没有这个应用」。
+    let error = catalog::refresh_url_icon(&state, "no-such-app").expect_err("未知应用应当报错");
+    assert_eq!(error.code, "app_not_found");
+}
+
+#[test]
 fn url_app_without_a_reachable_site_falls_back_to_the_builtin_icon() {
     let directory = TestDir::new("url-icon-fallback");
     let state = directory.state();
@@ -856,6 +916,160 @@ fn url_app_without_a_reachable_site_falls_back_to_the_builtin_icon() {
     );
     // 没抓到就没有缓存文件，孤儿对账也不会凭空多出一个 PNG。
     assert!(!directory.child(&format!("icons/{}.png", app.id)).exists());
+}
+
+// 把 `app_id` 伪装成「已经抓到过图标」：写一份缓存文件，并把 `icon_url` 指过去。
+//
+// 测试不该依赖网络，所以这两步直接做出来。`icon_url` 的具体内容不重要 ——
+// 判断「有没有真实图标」只跟内置占位图那一个值比对。
+fn mark_icon_as_fetched(directory: &TestDir, app_id: &str, bytes: &[u8]) {
+    let icons = directory.child("icons");
+    fs::create_dir_all(&icons).expect("icons dir should be created");
+    fs::write(icons.join(format!("{app_id}.png")), bytes).expect("cached icon should be written");
+
+    let store = directory.store();
+    let mut data = store.load_data().expect("data should load");
+    root_app_mut(&mut data, app_id).icon_url = format!("http://asset.localhost/{app_id}.png");
+    store.save_data(&data).expect("data should save");
+}
+
+// 顶层应用一定在 `RootItem::Apps` 那一行里（本文件的用例都按 `parent_id: None` 加）。
+fn root_app_mut<'a>(data: &'a mut AppData, app_id: &str) -> &'a mut AppEXE {
+    for item in &mut data.items {
+        if let RootItem::Apps(apps) = item {
+            if let Some(app) = apps.iter_mut().find(|app| app.id == app_id) {
+                return app;
+            }
+        }
+    }
+
+    panic!("root app {app_id} should exist");
+}
+
+// 加一个网址应用，返回它是不是**立刻**拿到了真实图标（也就是走了同源复用）。
+//
+// `catalog::add_app` 本身不联网 —— 联网那条路在 Command 层起的后台线程里，这里
+// 调不到，因此这个判断只可能来自复用。
+fn adds_with_real_icon(state: &AppState, url: &str) -> bool {
+    let app = catalog::add_app(
+        state,
+        AddAppRequest {
+            parent_id: None,
+            source_path: url.to_owned(),
+            name: None,
+            root_index: None,
+        },
+    )
+    .expect("url app should be added");
+
+    app.icon_url.starts_with("http://asset.localhost/")
+}
+
+#[test]
+fn a_url_app_reuses_the_icon_already_fetched_for_the_same_origin() {
+    let directory = TestDir::new("url-icon-reuse");
+    let state = directory.state();
+
+    let first = catalog::add_app(
+        &state,
+        AddAppRequest {
+            parent_id: None,
+            source_path: "https://reuse.example/docs/a".to_owned(),
+            name: Some("第一个".to_owned()),
+            root_index: None,
+        },
+    )
+    .expect("第一个应用应当添加成功");
+    mark_icon_as_fetched(&directory, &first.id, b"icon-bytes");
+
+    let second = catalog::add_app(
+        &state,
+        AddAppRequest {
+            parent_id: None,
+            source_path: "https://reuse.example/docs/b".to_owned(),
+            name: Some("第二个".to_owned()),
+            root_index: None,
+        },
+    )
+    .expect("第二个应用应当添加成功");
+
+    assert_eq!(second.icon_type, IconType::Url, "复用不改变应用类型");
+    assert!(
+        second.icon_url.starts_with("http://asset.localhost/"),
+        "同源复用应当立刻拿到真实图标，实际为 {}",
+        second.icon_url
+    );
+    assert_eq!(
+        fs::read(directory.child(&format!("icons/{}.png", second.id))).unwrap(),
+        b"icon-bytes",
+        "复用是把缓存文件复制一份"
+    );
+    // 各存各的一份：删掉第一个不能把第二个变成裂图。
+    assert!(
+        directory.child(&format!("icons/{}.png", first.id)).exists(),
+        "来源应用的缓存不该被移走"
+    );
+}
+
+#[test]
+fn icons_are_only_reused_within_the_same_origin() {
+    let directory = TestDir::new("url-icon-origin");
+    let state = directory.state();
+
+    let source = catalog::add_app(
+        &state,
+        AddAppRequest {
+            parent_id: None,
+            source_path: "https://origin.example/docs".to_owned(),
+            name: Some("源站点".to_owned()),
+            root_index: None,
+        },
+    )
+    .expect("源应用应当添加成功");
+    mark_icon_as_fetched(&directory, &source.id, b"icon-bytes");
+
+    // 同源、只是路径不同 —— 复用。
+    assert!(
+        adds_with_real_icon(&state, "https://origin.example/other"),
+        "同源的另一个入口应当复用"
+    );
+    // 子域是**另一个站点**，图标可能完全不一样。
+    assert!(
+        !adds_with_real_icon(&state, "https://docs.origin.example/"),
+        "子域不该复用"
+    );
+    // 端口不同就是不同站点（`localhost:3000` 和 `localhost:5173` 是两回事）。
+    assert!(
+        !adds_with_real_icon(&state, "https://origin.example:8443/"),
+        "端口不同不该复用"
+    );
+    assert!(
+        !adds_with_real_icon(&state, "http://origin.example/"),
+        "协议不同不该复用"
+    );
+}
+
+#[test]
+fn an_app_still_holding_the_builtin_icon_is_not_a_reuse_source() {
+    let directory = TestDir::new("url-icon-no-source");
+    let state = directory.state();
+
+    // 端口 1 上没有服务：第一个应用抓不到图标，只有内置占位图。
+    catalog::add_app(
+        &state,
+        AddAppRequest {
+            parent_id: None,
+            source_path: "http://127.0.0.1:1/a".to_owned(),
+            name: Some("没图标的".to_owned()),
+            root_index: None,
+        },
+    )
+    .expect("第一个应用应当添加成功");
+
+    assert!(
+        !adds_with_real_icon(&state, "http://127.0.0.1:1/b"),
+        "来源应用自己都没图标，没有可复用的东西"
+    );
 }
 
 #[test]

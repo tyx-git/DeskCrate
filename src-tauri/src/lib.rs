@@ -82,9 +82,20 @@ pub fn run() {
                 Err(error) => log::warn!("图标缓存对账失败: {error}"),
             }
 
+            // 开机自启动对账：配置说开就确保 Run 键里有我们，说关就确保没有。
+            // 与图标对账同理，失败只记日志 —— 不该因为注册表不可写就起不来。
+            if let Err(error) =
+                services::settings::reconcile_auto_start(app.state::<state::AppState>().inner())
+            {
+                log::warn!("开机自启动对账失败: {error}");
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            // 诊断命令只在 debug 构建里注册，见 `commands::diagnostics`。
+            #[cfg(debug_assertions)]
+            commands::diagnostics::probe_url_icon,
             commands::catalog::get_all_data,
             commands::catalog::add_category,
             commands::catalog::rename_category,

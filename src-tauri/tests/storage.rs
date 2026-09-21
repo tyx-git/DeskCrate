@@ -25,6 +25,7 @@ fn data_and_config_files_are_separate_persistence_channels() {
     assert!(data_raw.contains("categories"));
     assert!(!data_raw.contains("autoCollapse"));
     assert!(config_raw.contains("autoCollapse"));
+    assert!(config_raw.contains("autoStart"));
     assert!(!config_raw.contains("categories"));
 }
 

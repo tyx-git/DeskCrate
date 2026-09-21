@@ -59,6 +59,8 @@ export interface Settings {
   viewMode: ViewMode;
   /** 鼠标离开侧栏后是否自动收起。 */
   autoCollapse: boolean;
+  /** 是否随 Windows 登录自动启动。 */
+  autoStart: boolean;
 }
 
 /** `is_init` 与 `apply_view_mode` 的返回结构。 */

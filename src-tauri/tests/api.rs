@@ -10,11 +10,44 @@ use tauri::{
 
 use app_lib::{
     commands,
-    models::{Settings, WindowPosition, WindowSize},
+    error::AppResult,
+    models::{AddAppRequest, AppEXE, Settings, WindowPosition, WindowSize},
+    services,
+    state::AppState,
     storage::SettingsRepository,
 };
 
 use support::TestDir;
+
+/**
+ * `add_app` 的测试替身。
+ *
+ * 真正的 `add_app` 还要一个 `AppHandle` —— 用来在后台补抓完网址图标之后发事件。
+ * 但这套测试跑在 `MockRuntime` 上，而 `AppHandle` 在那里不是合法的 `CommandArg`，
+ * 注册不进去。
+ *
+ * 所以这里注册一个**同签名**的替身，只做前半段（落库）。参数名、camelCase 转换
+ * 和返回值都与真实命令一致，因此这个测试该验的 IPC 形状仍然验得到；后台补图标
+ * 那条路径由 `services_catalog` 的用例覆盖。
+ */
+#[tauri::command]
+fn add_app(
+    parent_id: Option<String>,
+    source_path: String,
+    name: Option<String>,
+    root_index: Option<usize>,
+    state: tauri::State<'_, AppState>,
+) -> AppResult<AppEXE> {
+    services::catalog::add_app(
+        state.inner(),
+        AddAppRequest {
+            parent_id,
+            source_path,
+            name,
+            root_index,
+        },
+    )
+}
 
 fn request(command: &str, body: Value) -> InvokeRequest {
     InvokeRequest {
@@ -43,7 +76,7 @@ fn create_test_app(directory: &TestDir) -> tauri::App<tauri::test::MockRuntime> 
             commands::catalog::add_group,
             commands::catalog::rename_group,
             commands::catalog::delete_group,
-            commands::catalog::add_app,
+            add_app,
             commands::catalog::rename_app,
             commands::catalog::delete_app,
             commands::settings::get_settings,

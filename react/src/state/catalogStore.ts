@@ -51,6 +51,13 @@ interface CatalogState {
 
   launchApp: (app: AppEXE) => Promise<void>
   toggleCollapse: (id: string, isCollapsed: boolean) => void
+  /**
+   * 把某个应用的图标换掉，用于后台补抓到网址图标之后回填。
+   *
+   * 只改 `data` 里那一个应用的 `iconUrl`，不重新拉整份数据 —— 图标到达是高频
+   * 小更新，整份重拉会让侧栏无谓地重渲染。
+   */
+  applyIcon: (appId: string, iconUrl: string) => void
 }
 
 const EMPTY: AppData = { version: 2, items: [] }
@@ -217,6 +224,31 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     }
   },
 
+  applyIcon(appId, iconUrl) {
+    set((state) => {
+      let changed = false
+      const items = state.data.items.map((item) => {
+        if (isAppsRoot(item)) {
+          return {
+            Apps: item.Apps.map((app) =>
+              app.id === appId ? { ...app, iconUrl } : app,
+            ),
+          }
+        }
+        const category = item.Category
+        return {
+          Category: {
+            ...category,
+            groups: patchIconUrl(category.groups, appId, iconUrl, () => {
+              changed = true
+            }),
+          },
+        }
+      })
+      return changed ? { data: { ...state.data, items } } : {}
+    })
+  },
+
   toggleCollapse(id, isCollapsed) {
     writeCollapse(id, isCollapsed)
     set((state) => ({
@@ -241,6 +273,30 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     }))
   },
 }))
+
+/** 在一层节点里替换某个应用的图标地址；命中时调用 `onHit`。 */
+function patchIconUrl(
+  items: Item[],
+  appId: string,
+  iconUrl: string,
+  onHit: () => void,
+): Item[] {
+  return items.map((entry) => {
+    if ('App' in entry) {
+      if (entry.App.id !== appId) {
+        return entry
+      }
+      onHit()
+      return { App: { ...entry.App, iconUrl } }
+    }
+    return {
+      Group: {
+        ...entry.Group,
+        children: patchIconUrl(entry.Group.children, appId, iconUrl, onHit),
+      },
+    }
+  })
+}
 
 /** 只改动根节点上 id 命中的那一个分类。 */
 function mapCategories(

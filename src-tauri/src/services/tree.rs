@@ -271,6 +271,29 @@ pub(crate) fn for_each_item(data: &AppData, visit: &mut impl FnMut(&Item)) {
     }
 }
 
+/// 对**每一个**应用调用 `visit`，顶层应用和分类/分组里的都算。
+///
+/// `for_each_item` 只看分类内部，顶层 `Apps` 行里的应用它看不见。凡是「要找遍所有
+/// 应用」的场景（比如同源复用）都得走这里，否则顶层应用会被整行漏掉。
+pub(crate) fn for_each_app(data: &AppData, visit: &mut impl FnMut(&AppEXE)) {
+    for root in &data.items {
+        match root {
+            RootItem::Apps(apps) => {
+                for app in apps {
+                    visit(app);
+                }
+            }
+            RootItem::Category(category) => {
+                for_each_in_items(&category.groups, &mut |item| {
+                    if let Item::App(app) = item {
+                        visit(app);
+                    }
+                });
+            }
+        }
+    }
+}
+
 fn find_group_in_items<'a>(items: &'a [Item], id: &str) -> Option<&'a Group> {
     find_in_items(items, 0, &mut |item, _| match item {
         Item::Group(group) if group.id == id => Some(group),

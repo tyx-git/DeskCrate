@@ -15,7 +15,9 @@ import { Switch } from '../common/Switch'
  */
 export function SettingsPanel() {
   const autoCollapse = useSettingsStore((state) => state.settings?.autoCollapse ?? false)
+  const autoStart = useSettingsStore((state) => state.settings?.autoStart ?? false)
   const setAutoCollapse = useSettingsStore((state) => state.setAutoCollapse)
+  const setAutoStart = useSettingsStore((state) => state.setAutoStart)
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen)
 
   // Esc 退出设置页，与对话框、右键菜单的行为保持一致。
@@ -56,6 +58,12 @@ export function SettingsPanel() {
             onChange={(next) => void setAutoCollapse(next)}
             label="自动收起"
             description="鼠标离开侧栏后自动收成指示条；关闭则一直保持展开。"
+          />
+          <Switch
+            checked={autoStart}
+            onChange={(next) => void setAutoStart(next)}
+            label="开机自启动"
+            description="登录 Windows 后自动启动 DeskCrate。"
           />
         </section>
       </div>

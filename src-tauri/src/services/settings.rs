@@ -3,6 +3,7 @@ use crate::{
     models::{AppError, Settings},
     state::AppState,
     storage::SettingsRepository,
+    system,
 };
 
 // 读取 `config.json` 中的全部应用配置。
@@ -18,12 +19,34 @@ pub fn get_settings(state: &AppState) -> AppResult<Settings> {
 pub fn update_settings(state: &AppState, settings: Settings) -> AppResult<Settings> {
     validate_settings(&settings)?;
 
+    // 开机自启动落在注册表里，先动它再落盘：注册表写失败就整体不生效，
+    // 不会留下「配置说开了、系统却不启动」的分裂状态。
     let store = state.get_lock()?;
+    let previous = store.load_settings()?;
+    if previous.auto_start != settings.auto_start {
+        system::registory::set_auto_start_enabled(settings.auto_start)?;
+    }
+
     store.mutate_settings(|current| {
         *current = settings.clone();
         Ok(())
     })?;
     Ok(settings)
+}
+
+// 启动时把开机自启动对一次账。
+//
+// 配置是应用状态、注册表是系统状态，两者会各说各话：用户手动清掉启动项、
+// 或者换了安装目录之后旧路径还挂在 Run 键里。这里以配置为准补一次，
+// 保证「设置里开着」和「系统会启动我们」不会长期不一致。
+//
+// 失败只向上返回错误，由调用方决定要不要惊动用户 —— 自启动是附加功能，
+// 不该拦住启动。
+pub fn reconcile_auto_start(state: &AppState) -> AppResult<()> {
+    let store = state.get_lock()?;
+    let configured = store.load_settings()?.auto_start;
+    system::registory::reconcile_auto_start(configured);
+    Ok(())
 }
 
 fn validate_settings(settings: &Settings) -> AppResult<()> {

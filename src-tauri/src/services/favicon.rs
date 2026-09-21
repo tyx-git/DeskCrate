@@ -30,7 +30,16 @@ use crate::{
 // 单个图标 1MB 已经远远超过任何 favicon 的合理大小。
 const PAGE_MAX_BYTES: usize = 256 * 1024;
 const ICON_MAX_BYTES: usize = 1024 * 1024;
-const TIMEOUT_MS: i32 = 3000;
+
+// 单次请求 5 秒，整次抓取 8 秒。
+//
+// 原先单次 3 秒：实测 `vuejs.org` 用浏览器 UA 也要 6 秒才响应（慢速通道），3 秒
+// 超时下它必然失败，但站点本身是好的，放宽就能拿到。
+//
+// 总预算是另一回事 —— 站点不可达时每个候选都会各自耗满一次超时，没有总闸就会
+// 叠成十几秒。到了预算就停手，用已经拿到的最好结果（哪怕是内置图标）。
+const TIMEOUT_MS: i32 = 5000;
+const TOTAL_BUDGET_MS: u128 = 8000;
 
 // 最多尝试几个候选地址。站点可能声明一堆不同尺寸的图标，逐个试下去会把
 // 「添加一个网址」拖成好几秒的等待。
@@ -39,17 +48,71 @@ const MAX_CANDIDATES: usize = 3;
 // 图标缩放后的最长边。128 已经足够侧栏那个 44px 的格子在高 DPI 屏上清晰。
 const ICON_MAX_EDGE: u32 = 128;
 
-/// 抓取 `url` 的站点图标，返回可直接存成 PNG 的图像。
-pub(crate) fn fetch_icon(url: &str) -> AppResult<RgbaImage> {
-    let candidates = collect_candidates(url);
+/// 一次抓取的最终产物。
+///
+/// 分成两种是因为 SVG 走不了位图那条路：`image` crate 不支持 SVG，但 WebView 的
+/// `<img>` 原生能渲染，而且矢量在 44px 的格子里比位图还清楚。所以 SVG 不解码，
+/// 把原文字节交出去，由存储层按 `.svg` 落盘。
+pub(crate) enum FetchedIcon {
+    /// 解码好并缩到统一边长上限的位图。
+    Bitmap(RgbaImage),
+    /// SVG 原文。
+    Svg(Vec<u8>),
+}
+
+/// 抓取 `url` 的站点图标。
+pub(crate) fn fetch_icon(url: &str) -> AppResult<FetchedIcon> {
+    fetch_icon_into(url, &mut Vec::new())
+}
+
+/// 抓取图标，并把每一步的结果写进 `log`。
+///
+/// **诊断探针与正常抓取共用这一条代码路径** —— 探针要是自己另写一套请求，量到的
+/// 就不是真实行为了（比如换成了 Node 的网络栈，403 和 UA 问题全都不复现）。
+/// 正常抓取传一个随即丢弃的 `Vec`，代价只有一点记账。
+fn fetch_icon_into(url: &str, log: &mut Vec<ProbeStep>) -> AppResult<FetchedIcon> {
+    let mut budget = Budget::new(TOTAL_BUDGET_MS);
+    let declared = declared_candidates(url, log, &mut budget);
+    // 约定路径是**另一段**：声明的候选最多试 `MAX_CANDIDATES` 个，试完还没拿到才
+    // 轮到它们。合成一条链的话，一个声明了 3 个图标却全都拿不到的站点就永远轮不
+    // 到 `/favicon.ico`，而它往往就在那儿。
+    let conventions = convention_candidates(url);
+    let chain = declared
+        .iter()
+        .take(MAX_CANDIDATES)
+        .chain(conventions.iter());
 
     let mut last_error = AppError::new("favicon_unavailable", "没有可用的网址图标".to_owned());
 
-    for candidate in candidates.iter().take(MAX_CANDIDATES) {
-        match fetch_image(candidate) {
-            Ok(image) => return Ok(image),
+    // `attempted` 是当前候选的下标：0 表示还一个都没试过。
+    for (attempted, candidate) in chain.enumerate() {
+        // 预算用尽就停手 —— 但**第一个候选一定要试**。
+        //
+        // 取首页本身可能就吃掉整个预算（慢速通道的站点一次请求能拖到 20 秒，
+        // 而预算只有 8 秒）。这时候如果一个候选都不试，这次抓取就注定失败 ——
+        // 实测 `react.dev` / `bilibili` 正是这么丢的：页面拿到了、声明了 4 个图标，
+        // 却因为预算见底一个都没请求。预算该管的是「别一个接一个地试下去」，
+        // 不是「连试都别试」。
+        //
+        // 另外，光判断「已经超了」还不够：WinHTTP 的超时是**四个阶段各自独立**
+        // 的（解析 / 连接 / 发送 / 接收），一次请求最坏能拖到 4 倍时长。所以还要把
+        // 剩余预算当作本次的超时传下去，才能让总耗时真的收敛到预算附近。
+        if attempted > 0 && budget.exhausted() {
+            log.push(ProbeStep::note(
+                "result",
+                &candidate.url,
+                "总预算用尽，停止尝试",
+            ));
+            break;
+        }
+
+        match fetch_image(&candidate.url, log, &mut budget) {
+            Ok(icon) => {
+                log.push(ProbeStep::note("result", &candidate.url, "命中，结束"));
+                return Ok(icon);
+            }
             Err(error) => {
-                log::debug!("网址图标候选 {} 不可用: {}", candidate, error.message);
+                log::debug!("网址图标候选 {} 不可用: {}", candidate.url, error.message);
                 last_error = error;
             }
         }
@@ -58,28 +121,317 @@ pub(crate) fn fetch_icon(url: &str) -> AppResult<RgbaImage> {
     Err(last_error)
 }
 
-/// 组装候选地址：`<link rel=icon>` 里声明的优先，站点根目录的
-/// `/favicon.ico` 兜底。
-fn collect_candidates(url: &str) -> Vec<String> {
-    let mut candidates = Vec::new();
+/// 整次抓取共用的一份时间预算。
+///
+/// 存在的理由：`TIMEOUT_MS` 只是**单次请求的**超时，而 WinHTTP 把它分别套在解析、
+/// 连接、发送、接收四个阶段上 —— 一次请求最坏能拖到 4 倍时长。只靠「每步不超时」
+/// 算不出总时长，必须另外记一个整体预算，并把剩余时间传下去当本次的超时。
+struct Budget {
+    started: std::time::Instant,
+    total_ms: u128,
+}
 
-    if let Some(parts) = split_url(url) {
-        if let Ok(page) = http::get(&parts, PAGE_MAX_BYTES, TIMEOUT_MS) {
-            if page.status == 200 {
-                let html = String::from_utf8_lossy(&page.body);
-                candidates.extend(icon_candidates(&html, url));
-            }
+impl Budget {
+    fn new(total_ms: u128) -> Self {
+        Self {
+            started: std::time::Instant::now(),
+            total_ms,
         }
     }
 
-    candidates.push(origin_favicon(url));
+    /// 已经过去多久。
+    fn elapsed_ms(&self) -> u128 {
+        self.started.elapsed().as_millis()
+    }
+
+    fn exhausted(&self) -> bool {
+        self.elapsed_ms() >= self.total_ms
+    }
+
+    /// 本次请求还能用多久；至少给 1ms，不传 0（WinHTTP 会把 0 当成「无限等待」）。
+    fn remaining(&self) -> i32 {
+        let cap = u128::try_from(TIMEOUT_MS).unwrap_or(5000);
+        let left = self.total_ms.saturating_sub(self.elapsed_ms()).min(cap);
+        i32::try_from(left).unwrap_or(TIMEOUT_MS).max(1)
+    }
+}
+
+/// 诊断用：探测一个网址能不能抓到图标，并给出每一步的细节。
+///
+/// 只诊断、不落盘：拿到的图标丢掉，不写 `icons/`。
+///
+/// 只有 debug 构建才用得到（`probe_url_icon` 命令同样只在 debug 下注册），
+/// release 里连带 `UrlIconProbe` 一起裁掉，否则会被算成死代码。
+#[cfg(debug_assertions)]
+pub(crate) fn probe(url: &str) -> UrlIconProbe {
+    let started = std::time::Instant::now();
+    let mut steps = Vec::new();
+    let outcome = fetch_icon_into(url, &mut steps);
+    let elapsed = started.elapsed();
+
+    let stage = match &outcome {
+        Ok(FetchedIcon::Bitmap(image)) => format!("成功 {}x{}", image.width(), image.height()),
+        Ok(FetchedIcon::Svg(bytes)) => format!("成功 SVG {} 字节", bytes.len()),
+        Err(error) => format!("失败：{}", error.message),
+    };
+
+    UrlIconProbe {
+        url: url.to_owned(),
+        ok: outcome.is_ok(),
+        stage,
+        total_ms: elapsed.as_millis(),
+        steps,
+    }
+}
+
+/// 诊断用：一次抓取里某一步的结果。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProbeStep {
+    /// `page`（取首页）／`candidate`（下载某个候选）／`result`（结论）。
+    pub stage: String,
+    pub url: String,
+    pub status: Option<u32>,
+    pub bytes: usize,
+    /// 按魔数判断出的内容类型；用来识别「状态 200 但其实是 HTML」的软 404。
+    pub kind: Option<String>,
+    pub note: String,
+}
+
+impl ProbeStep {
+    fn note(stage: &str, url: &str, note: &str) -> Self {
+        Self {
+            stage: stage.to_owned(),
+            url: url.to_owned(),
+            status: None,
+            bytes: 0,
+            kind: None,
+            note: note.to_owned(),
+        }
+    }
+}
+
+/// 诊断用：一个网址的完整探测报告。
+#[cfg(debug_assertions)]
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UrlIconProbe {
+    pub url: String,
+    pub ok: bool,
+    /// 成功时是图像尺寸，失败时是最后一个错误。
+    pub stage: String,
+    pub total_ms: u128,
+    pub steps: Vec<ProbeStep>,
+}
+
+/// 按魔数判断一段字节是什么。
+///
+/// 挡掉「HTTP 状态是 200、内容其实是 HTML 错误页」这种情况：不先认一下内容，
+/// 这种候选会一路走到解码才失败，白白吃掉一个候选名额和一次超时等待。
+pub(crate) fn sniff_kind(bytes: &[u8]) -> &'static str {
+    match bytes {
+        [0x89, b'P', b'N', b'G', ..] => "png",
+        [0xFF, 0xD8, 0xFF, ..] => "jpeg",
+        [b'G', b'I', b'F', b'8', ..] => "gif",
+        [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => "webp",
+        [b'B', b'M', ..] => "bmp",
+        [0x00, 0x00, 0x01, 0x00, ..] => "ico",
+        _ => {
+            // SVG 与 HTML 前面可能带 UTF-8 BOM、空白或 XML 声明；先跳过这些，再
+            // 认根标签。不能只看前 256 字节里是否包含 `<svg`，否则一个 HTML
+            // 错误页在正文里提到 SVG 也会被误判成图标。
+            let text = String::from_utf8_lossy(bytes);
+            let head = text.trim_start_matches('\u{feff}').trim_start();
+            let lower = head
+                .get(..head.len().min(512))
+                .unwrap_or(head)
+                .to_ascii_lowercase();
+
+            if lower.starts_with("<svg") || lower.starts_with("<?xml") && lower.contains("<svg") {
+                "svg"
+            } else if lower.starts_with("<html")
+                || lower.starts_with("<!doctype html")
+                || lower.starts_with("<head")
+                || lower.starts_with("<body")
+            {
+                "html"
+            } else {
+                "unknown"
+            }
+        }
+    }
+}
+
+/// 取首页，把它声明的图标候选按质量排好序返回。
+fn declared_candidates(url: &str, log: &mut Vec<ProbeStep>, budget: &mut Budget) -> Vec<Candidate> {
+    let mut candidates = Vec::new();
+
+    if let Some(parts) = split_url(url) {
+        match http::get(&parts, PAGE_MAX_BYTES, budget.remaining()) {
+            Ok(page) => {
+                let kind = sniff_kind(&page.body);
+                let declared = if page.status == 200 {
+                    let html = String::from_utf8_lossy(&page.body);
+                    let found = icon_candidates(&html, url);
+                    let count = found.len();
+                    candidates.extend(found);
+                    count
+                } else {
+                    0
+                };
+
+                log.push(ProbeStep {
+                    stage: "page".to_owned(),
+                    url: url.to_owned(),
+                    status: Some(page.status),
+                    bytes: page.body.len(),
+                    kind: Some(kind.to_owned()),
+                    note: format!("声明了 {declared} 个图标候选"),
+                });
+            }
+            Err(error) => log.push(ProbeStep {
+                stage: "page".to_owned(),
+                url: url.to_owned(),
+                status: None,
+                bytes: 0,
+                kind: None,
+                note: format!("取首页失败：{}", error.message),
+            }),
+        }
+    }
+
     candidates
 }
 
-/// 下载（或就地解码）一个候选地址，成功则返回图像。
-fn fetch_image(candidate: &str) -> AppResult<RgbaImage> {
-    if let Some(image) = decode_data_uri(candidate) {
-        return Ok(image);
+/// 一个图标候选，带排序要用的质量信息。
+///
+/// 存在的理由：站点常常一次性声明好几个图标（16×16 的 ico、32×32 的 png、
+/// 180×180 的 apple-touch-icon），而最多只能试 `MAX_CANDIDATES` 个。按文档顺序
+/// 取会让最小的那个抢走名额，剩下的再好也轮不上。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Candidate {
+    url: String,
+    /// 声明的最大边长，已夹到 `ICON_MAX_EDGE`。
+    edge: u32,
+    /// 格式优先级，越小越优先。见 `FORMAT_*`。
+    format: u8,
+}
+
+// 格式优先级：数字越小越优先。
+/// 能直接解码的位图（png / webp / jpeg / gif）。
+const FORMAT_BITMAP: u8 = 0;
+/// SVG。浏览器能原生渲染，但同尺寸下仍优先使用位图。
+const FORMAT_SVG: u8 = 1;
+/// ICO 和认不出来的格式。ICO 常常只有 16×16，所以排在位图与 SVG 之后。
+const FORMAT_LEGACY: u8 = 2;
+
+impl Candidate {
+    fn new(url: String, declared_type: Option<&str>, sizes: &str) -> Self {
+        let format = format_rank(declared_type, &url);
+        // SVG 是矢量，缩到任何尺寸都不失真，而它通常写 `sizes="any"` ——
+        // `declared_edge` 对这种（以及缺失）本来就按上限计，正好合用。
+        let edge = declared_edge(sizes);
+
+        Self { url, edge, format }
+    }
+}
+
+/// 按 `sizes` 声明取出最长边；`16x16 32x32` 取最大的那个。
+///
+/// 缺失或 `sizes="any"` 时按 `ICON_MAX_EDGE` 计：多数站点不写 sizes 时给的就是
+/// 主图标，没必要因此把它排到后面去。
+fn declared_edge(sizes: &str) -> u32 {
+    let mut best = 0;
+    for part in sizes.split_whitespace() {
+        let Some((width, height)) = part.split_once('x') else {
+            continue;
+        };
+        let (Ok(width), Ok(height)) = (width.parse::<u32>(), height.parse::<u32>()) else {
+            continue;
+        };
+        best = best.max(width).max(height);
+    }
+
+    if best == 0 {
+        ICON_MAX_EDGE
+    } else {
+        // 图标最终会被压到 `ICON_MAX_EDGE`，超过它的尺寸对我们没区别 —— 夹住，
+        // 免得 512×512 压过同样够用的 180×180。
+        best.min(ICON_MAX_EDGE)
+    }
+}
+
+/// 先认 `<link type="…">` 声明的 MIME，认不出再按扩展名猜。
+fn format_rank(declared_type: Option<&str>, url: &str) -> u8 {
+    let mime = declared_type.unwrap_or_default().to_ascii_lowercase();
+    if mime.contains("svg") {
+        return FORMAT_SVG;
+    }
+    if mime.contains("png")
+        || mime.contains("jpeg")
+        || mime.contains("gif")
+        || mime.contains("webp")
+    {
+        return FORMAT_BITMAP;
+    }
+    if mime.contains("icon") {
+        return FORMAT_LEGACY;
+    }
+
+    // 去掉查询串再看扩展名。
+    let path = url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(url)
+        .to_ascii_lowercase();
+    if path.ends_with(".svg") {
+        FORMAT_SVG
+    } else if path.ends_with(".png")
+        || path.ends_with(".jpg")
+        || path.ends_with(".jpeg")
+        || path.ends_with(".gif")
+        || path.ends_with(".webp")
+    {
+        FORMAT_BITMAP
+    } else {
+        FORMAT_LEGACY
+    }
+}
+
+/// 站点约定路径：即使页面什么都没声明，这些位置也可能有图标。
+///
+/// 排在页面声明的候选**之后** —— 声明是站点自己指明的，约定路径只是「可能在那儿」，
+/// 命中率明显低一档。
+fn convention_candidates(url: &str) -> Vec<Candidate> {
+    let (scheme, rest) = url.split_once("://").unwrap_or(("https", url));
+    let authority = authority_of(rest);
+
+    ["favicon.ico", "favicon.png", "apple-touch-icon.png"]
+        .into_iter()
+        .map(|name| {
+            let path = format!("{scheme}://{authority}/{name}");
+            Candidate {
+                edge: 0,
+                format: format_rank(None, &path),
+                url: path,
+            }
+        })
+        .collect()
+}
+
+/// 下载（或就地解码）一个候选地址，成功则返回图标。
+fn fetch_image(
+    candidate: &str,
+    log: &mut Vec<ProbeStep>,
+    budget: &mut Budget,
+) -> AppResult<FetchedIcon> {
+    if let Some(icon) = decode_data_uri(candidate) {
+        log.push(ProbeStep::note(
+            "candidate",
+            candidate,
+            "内联 data URI，直接解码",
+        ));
+        return Ok(icon);
     }
 
     let parts = split_url(candidate).ok_or_else(|| {
@@ -89,15 +441,90 @@ fn fetch_image(candidate: &str) -> AppResult<RgbaImage> {
         )
     })?;
 
-    let response = http::get(&parts, ICON_MAX_BYTES, TIMEOUT_MS)?;
+    // 用 `inspect_err` 而不是 `map_err`：这里只想**顺便**记一笔，错误原样往上传。
+    let response = http::get(&parts, ICON_MAX_BYTES, budget.remaining()).inspect_err(|error| {
+        log.push(ProbeStep {
+            stage: "candidate".to_owned(),
+            url: candidate.to_owned(),
+            status: None,
+            bytes: 0,
+            kind: None,
+            note: format!("请求失败：{}", error.message),
+        });
+    })?;
+
+    let kind = sniff_kind(&response.body);
     if response.status != 200 {
+        log.push(ProbeStep {
+            stage: "candidate".to_owned(),
+            url: candidate.to_owned(),
+            status: Some(response.status),
+            bytes: response.body.len(),
+            kind: Some(kind.to_owned()),
+            note: format!("状态 {}", response.status),
+        });
         return Err(AppError::new(
             "favicon_fetch_failed",
             format!("{} 返回了状态 {}", candidate, response.status),
         ));
     }
 
-    decode_image(&response.body, candidate)
+    if kind == "html" {
+        log.push(ProbeStep {
+            stage: "candidate".to_owned(),
+            url: candidate.to_owned(),
+            status: Some(response.status),
+            bytes: response.body.len(),
+            kind: Some(kind.to_owned()),
+            note: "状态 200 但内容是 HTML（软 404）".to_owned(),
+        });
+        return Err(AppError::new(
+            "favicon_not_image",
+            format!("{candidate} 返回的不是图片"),
+        ));
+    }
+
+    // SVG 不解码，原样交出去。
+    //
+    // `image` crate 不支持 SVG，送进去只会得到一个解码失败；而 WebView 的
+    // `<img>` 原生能渲染 SVG，矢量在 44px 的格子里还比位图清楚。所以这里
+    // 直接把字节带出去，由存储层按 `.svg` 落盘。
+    if kind == "svg" {
+        log.push(ProbeStep {
+            stage: "candidate".to_owned(),
+            url: candidate.to_owned(),
+            status: Some(response.status),
+            bytes: response.body.len(),
+            kind: Some(kind.to_owned()),
+            note: "SVG 原文，直接落盘".to_owned(),
+        });
+        return Ok(FetchedIcon::Svg(response.body));
+    }
+
+    match decode_image(&response.body, candidate) {
+        Ok(image) => {
+            log.push(ProbeStep {
+                stage: "candidate".to_owned(),
+                url: candidate.to_owned(),
+                status: Some(response.status),
+                bytes: response.body.len(),
+                kind: Some(kind.to_owned()),
+                note: "解码成功".to_owned(),
+            });
+            Ok(FetchedIcon::Bitmap(image))
+        }
+        Err(error) => {
+            log.push(ProbeStep {
+                stage: "candidate".to_owned(),
+                url: candidate.to_owned(),
+                status: Some(response.status),
+                bytes: response.body.len(),
+                kind: Some(kind.to_owned()),
+                note: format!("解码失败：{}", error.message),
+            });
+            Err(error)
+        }
+    }
 }
 
 /// 解码一段图片字节，并缩到统一的边长上限。
@@ -133,7 +560,9 @@ fn fit_within(image: RgbaImage) -> RgbaImage {
 /// 就地解码 `data:image/…;base64,…` 形式的内联图标。
 ///
 /// 有些站点把小图标直接内联在 HTML 里，省一个请求。这种候选不需要联网。
-fn decode_data_uri(candidate: &str) -> Option<RgbaImage> {
+///
+/// SVG 的 data URI 也走这里：同样不做解码，原样带出去。
+fn decode_data_uri(candidate: &str) -> Option<FetchedIcon> {
     let rest = candidate.strip_prefix("data:")?;
     if !rest.starts_with("image/") {
         return None;
@@ -150,15 +579,13 @@ fn decode_data_uri(candidate: &str) -> Option<RgbaImage> {
         .decode(payload.trim())
         .ok()?;
 
-    decode_image(&bytes, "内联图标").ok()
-}
+    if meta.to_ascii_lowercase().contains("svg") {
+        return Some(FetchedIcon::Svg(bytes));
+    }
 
-/// 站点根目录的 `/favicon.ico`。
-///
-/// 这是最老、也最通用的约定：即使页面没有声明任何图标，浏览器也会尝试它。
-fn origin_favicon(url: &str) -> String {
-    let (scheme, rest) = url.split_once("://").unwrap_or(("https", url));
-    format!("{scheme}://{}/favicon.ico", authority_of(rest))
+    decode_image(&bytes, "内联图标")
+        .ok()
+        .map(FetchedIcon::Bitmap)
 }
 
 /// 把 URL 拆成 WinHTTP 需要的三部分。
@@ -255,11 +682,14 @@ fn join_path(dir: &str, reference: &str) -> String {
     format!("/{}", segments.join("/"))
 }
 
-/// 从 HTML 里按出现顺序挑出图标候选。
+/// 从 HTML 里挑出图标候选，并按**质量**排序返回。
 ///
 /// 只扫 `<link>` 标签，且要求 `rel` 里出现 `icon` —— 这样 `apple-touch-icon`、
 /// `shortcut icon`、`mask-icon` 都能命中，而样式表之类的不会被算进来。
-pub(crate) fn icon_candidates(html: &str, base: &str) -> Vec<String> {
+///
+/// 排序规则：边长降序（同尺寸时位图优先于 ICO、ICO 优先于解不了的 SVG）。
+/// 文档顺序不作数 —— 站点常常把 16×16 的 ico 写在最前面。
+pub(crate) fn icon_candidates(html: &str, base: &str) -> Vec<Candidate> {
     // 大小写不敏感地找标签，但属性值（尤其是 URL）必须按原样取出。
     let lower = html.to_ascii_lowercase();
     let mut candidates = Vec::new();
@@ -289,11 +719,15 @@ pub(crate) fn icon_candidates(html: &str, base: &str) -> Vec<String> {
         let href = html[start + from..start + to]
             .trim()
             .trim_matches(|c| c == '"' || c == '\'');
+
+        let declared_type = attribute_value(tag, "type");
+        let sizes = attribute_value(tag, "sizes").unwrap_or_default();
         if let Some(resolved) = resolve_reference(base, href) {
-            candidates.push(resolved);
+            candidates.push(Candidate::new(resolved, declared_type.as_deref(), &sizes));
         }
     }
 
+    candidates.sort_by(|a, b| b.edge.cmp(&a.edge).then(a.format.cmp(&b.format)));
     candidates
 }
 
@@ -433,6 +867,11 @@ mod tests {
         );
     }
 
+    /// 只比地址，不比排序信息 —— 质量字段单独有用例覆盖。
+    fn urls_of(candidates: &[Candidate]) -> Vec<&str> {
+        candidates.iter().map(|c| c.url.as_str()).collect()
+    }
+
     #[test]
     fn icon_candidates_picks_icon_links_and_ignores_stylesheets() {
         let html = r#"
@@ -444,12 +883,10 @@ mod tests {
         "#;
 
         let candidates = icon_candidates(html, "https://a.com/docs/page");
+        // 没写 sizes 的按「够用」计，所以 touch.png 排在 32×32 的 fav.png 前面。
         assert_eq!(
-            candidates,
-            vec![
-                "https://a.com/fav.png".to_owned(),
-                "https://a.com/docs/touch.png".to_owned()
-            ]
+            urls_of(&candidates),
+            vec!["https://a.com/docs/touch.png", "https://a.com/fav.png"]
         );
     }
 
@@ -458,8 +895,54 @@ mod tests {
         // `data-href` 里也有 `href`，不能被误当成真正的属性。
         let html = r#"<link rel="icon" data-href="/wrong.png" href="/right.png">"#;
         assert_eq!(
-            icon_candidates(html, "https://a.com"),
-            vec!["https://a.com/right.png".to_owned()]
+            urls_of(&icon_candidates(html, "https://a.com")),
+            vec!["https://a.com/right.png"]
+        );
+    }
+
+    #[test]
+    fn icon_candidates_sorts_biggest_first_and_keeps_svg_usable() {
+        let html = r#"
+            <link rel="icon" href="/small.ico" sizes="16x16">
+            <link rel="icon" href="/huge.svg" sizes="any" type="image/svg+xml">
+            <link rel="icon" href="/big.png" sizes="180x180">
+        "#;
+
+        // 大的在前；SVG 现在可直接由 WebView 渲染，所以与同尺寸位图同属可用候选。
+        assert_eq!(
+            urls_of(&icon_candidates(html, "https://a.com")),
+            vec![
+                "https://a.com/big.png",
+                "https://a.com/huge.svg",
+                "https://a.com/small.ico"
+            ]
+        );
+    }
+
+    #[test]
+    fn declared_edge_clamps_to_the_icon_limit() {
+        // 512 和 180 对最终 128 的图标没有区别，不该互相压过。
+        assert_eq!(
+            declared_edge("512x512"),
+            ICON_MAX_EDGE,
+            "超过上限的按上限计"
+        );
+        assert_eq!(declared_edge("180x180"), ICON_MAX_EDGE);
+        assert_eq!(declared_edge("64x64"), 64, "没到上限的按实际尺寸");
+        assert_eq!(declared_edge("16x16 32x32"), 32, "多个尺寸取最大的那个");
+        assert_eq!(declared_edge(""), ICON_MAX_EDGE, "没声明按够用计");
+        assert_eq!(declared_edge("any"), ICON_MAX_EDGE, "矢量图按够用计");
+    }
+
+    #[test]
+    fn convention_candidates_covers_the_usual_paths() {
+        assert_eq!(
+            urls_of(&convention_candidates("https://a.com/docs/page")),
+            vec![
+                "https://a.com/favicon.ico",
+                "https://a.com/favicon.png",
+                "https://a.com/apple-touch-icon.png"
+            ]
         );
     }
 

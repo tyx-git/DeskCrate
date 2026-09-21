@@ -36,6 +36,8 @@ windows = { version = "0.58", features = [
     # 抓取网址图标用的 HTTP 客户端。用系统自带的 WinHTTP 而不是引入
     # reqwest：TLS 走 schannel、代理走系统配置，都不用额外依赖。
     "Win32_Networking_WinHttp",
+    # 开机自启动写在 HKCU\...\CurrentVersion\Run 里。
+    "Win32_System_Registry",
 ] }
 lnk = "0.3"
 # 只用来解码内联在 `<link rel=icon href="data:image/...;base64,...">` 里的图标。

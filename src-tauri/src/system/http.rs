@@ -29,6 +29,18 @@ use crate::{error::AppResult, models::AppError};
 // 卡住添加流程好几秒的元凶。
 const READ_CHUNK: usize = 16 * 1024;
 
+// 请求用的 User-Agent。
+//
+// 这里刻意带上浏览器的形态，**实测依据**（见 `dosc/图标抓取/probe-result.md`）：
+// 同一个站点 `squoosh.app`，用产品自己的 UA 要 6349ms 才响应，换成浏览器 UA 只要
+// 637ms —— 差 10 倍。不少站点（CDN 或反爬）会给非浏览器客户端走慢速通道，在几秒
+// 的超时预算下走慢速通道就等于直接失败。
+//
+// 末尾仍然带上真实的产品标识：这是程序在替用户取图标，不是冒充用户浏览网页，
+// 留个真名让对方能识别来源。
+const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+     (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 DeskCrate/0.1";
+
 /// 一次 GET 的结果。
 pub(crate) struct HttpResponse {
     /// HTTP 状态码。
@@ -46,7 +58,7 @@ pub(crate) fn get(
     max_bytes: usize,
     timeout_ms: i32,
 ) -> AppResult<HttpResponse> {
-    let agent = to_wide("DeskCrate/0.1");
+    let agent = to_wide(USER_AGENT);
     let server = to_wide(url.host);
     let path = to_wide(url.path_and_query);
     let method = to_wide("GET");

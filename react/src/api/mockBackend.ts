@@ -126,12 +126,24 @@ function emojiIcon(glyph: string): string {
   return `data:image/svg+xml,${encodeURIComponent(svg)}`
 }
 
+function normalizeSettings(settings: Settings): Settings {
+  // 旧版预览存档没有 `autoStart`，按关闭迁移；这样新增设置项不会让预览
+  // 读到 undefined，也和 Rust 的 `#[serde(default)]` 保持一致。
+  return {
+    ...defaultSettings(),
+    ...settings,
+    window: { ...defaultSettings().window, ...settings.window },
+    autoStart: settings.autoStart ?? false,
+  }
+}
+
 function defaultSettings(): Settings {
   return {
     theme: 'default',
     window: { isInitialized: false, position: null, size: null, sizeOverride: null },
     viewMode: 'expanded',
     autoCollapse: false,
+    autoStart: false,
   }
 }
 
@@ -223,7 +235,7 @@ class MockBackend implements Backend {
 
   constructor() {
     this.data = normalizeData(readJson(STORAGE_KEY, seedData()))
-    this.settings = readJson(SETTINGS_KEY, defaultSettings())
+    this.settings = normalizeSettings(readJson(SETTINGS_KEY, defaultSettings()))
   }
 
   private persistData(): void {
@@ -596,6 +608,11 @@ class MockBackend implements Backend {
     }
 
     this.persistData()
+  }
+
+  // 预览模式没有后台抓图标这回事：mock 的网址图标本来就是现成的表情。
+  async onIconReady(): Promise<() => void> {
+    return () => {}
   }
 
   async renameApp(id: string, name: string): Promise<AppEXE> {

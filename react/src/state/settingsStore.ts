@@ -26,6 +26,7 @@ interface SettingsStore {
   syncWindowGeometry: () => Promise<void>
   resetWindowSize: () => Promise<void>
   setAutoCollapse: (autoCollapse: boolean) => Promise<void>
+  setAutoStart: (autoStart: boolean) => Promise<void>
 }
 
 // 收束动画的等待定时器。收束期间鼠标一旦回到面板上就要能打断，所以不能
@@ -37,6 +38,7 @@ const FALLBACK: Settings = {
   window: { isInitialized: false, position: null, size: null, sizeOverride: null },
   viewMode: 'expanded',
   autoCollapse: false,
+  autoStart: false,
 }
 
 export const useSettingsStore = create<SettingsStore>((set, get) => ({
@@ -166,6 +168,23 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     }
 
     const next: Settings = { ...settings, autoCollapse }
+    set({ settings: next })
+    try {
+      const saved = await backend.updateSettings(next)
+      set({ settings: saved })
+    } catch (error) {
+      set({ settings })
+      useUiStore.getState().notify('error', `保存配置失败：${describeError(toAppError(error))}`)
+    }
+  },
+
+  async setAutoStart(autoStart) {
+    const settings = get().settings
+    if (!settings) {
+      return
+    }
+
+    const next: Settings = { ...settings, autoStart }
     set({ settings: next })
     try {
       const saved = await backend.updateSettings(next)

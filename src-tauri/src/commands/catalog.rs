@@ -1,3 +1,5 @@
+use tauri::Emitter;
+
 use crate::{
     error::AppResult,
     models::{
@@ -63,10 +65,14 @@ pub fn delete_group(id: String, state: tauri::State<'_, AppState>) -> AppResult<
     services::catalog::delete_group(state.inner(), DeleteRequest { id })
 }
 
+// 后台抓到网址图标后发出的事件名。前端监听它，把占位图标换成真实图标。
+pub const ICON_READY_EVENT: &str = "dc://icon-ready";
+
 // 添加应用或快捷方式；图标和快捷方式字段由服务层自动解析。
 //
 // `parent_id` 传 `null` 表示直接放到顶层（此时 `rootIndex` 指定插到第几个
 // 根节点之前，省略则追加到最下方）；放进分类或分组时忽略 `rootIndex`。
+
 #[tauri::command]
 pub fn add_app(
     parent_id: Option<String>,
@@ -74,8 +80,9 @@ pub fn add_app(
     name: Option<String>,
     root_index: Option<usize>,
     state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
 ) -> AppResult<AppEXE> {
-    services::catalog::add_app(
+    let created = services::catalog::add_app(
         state.inner(),
         AddAppRequest {
             parent_id,
@@ -83,7 +90,41 @@ pub fn add_app(
             name,
             root_index,
         },
-    )
+    )?;
+
+    // 网址应用先带着图标返回，缺图标的话在后台补。
+    //
+    // 抓图标是几秒量级的网络操作，实测最慢 18 秒；如果等它完成再返回，「添加一个
+    // 网址」就会卡住那么久。这里把 `JsonStore` 克隆一份带进线程 —— 它内部只是几个
+    // 路径，跨进程锁靠文件锁，两个线程各持一份是安全的。
+    //
+    // 同源复用命中的应用返回时就已经带着真实图标了，`needs_url_icon` 会返回
+    // `false`，连线程都不起。
+    if services::catalog::needs_url_icon(&created) {
+        let app_id = created.id.clone();
+        let store = state.get_lock()?.clone();
+        std::thread::spawn(move || {
+            let state = AppState::new(store);
+            match services::catalog::refresh_url_icon(&state, &app_id) {
+                Ok(Some(icon_url)) => {
+                    if let Err(error) = app.emit(
+                        ICON_READY_EVENT,
+                        serde_json::json!({ "appId": app_id, "iconUrl": icon_url }),
+                    ) {
+                        log::warn!("通知图标就绪失败: {error}");
+                    }
+                }
+                Ok(None) => {
+                    log::debug!("{app_id} 没有可补的网址图标，继续用内置图标");
+                }
+                Err(error) => {
+                    log::debug!("补抓 {app_id} 的网址图标失败: {}", error.message);
+                }
+            }
+        });
+    }
+
+    Ok(created)
 }
 
 // 把一个应用移动到新位置（拖拽换位）。

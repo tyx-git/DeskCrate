@@ -133,4 +133,11 @@ pub struct Settings {
     pub window: WindowSettings, // 主窗口的位置和尺寸配置。
     pub view_mode: ViewMode,    // 侧栏当前是展开态还是收起态。
     pub auto_collapse: bool,    // 是否允许鼠标离开侧栏后自动切换为收起态。
+    /// 是否开机自启动。
+    ///
+    /// 这个字段**不是**配置说了算就完了：它同时要写进 Windows 的
+    /// `HKCU\...\CurrentVersion\Run`，否则系统不会启动我们。写入注册表的动作
+    /// 在 `services::settings::update_settings` 里完成，启动时再由
+    /// `reconcile_auto_start` 对一次账。
+    pub auto_start: bool,
 }

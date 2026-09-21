@@ -1,5 +1,8 @@
 import { invoke } from '@tauri-apps/api/core'
 
+/** 与后端 `commands::catalog::ICON_READY_EVENT` 保持一致。 */
+const ICON_READY_EVENT = 'dc://icon-ready'
+
 import type {
   AppData,
   AppEXE,
@@ -62,4 +65,14 @@ export const tauriBackend: Backend = {
   deleteApp: (id: string) => invoke<void>('delete_app', { id }),
 
   launchIcon: (id: string) => invoke<void>('launch_icon', { id }),
+
+  // 后台补抓到网址图标后后端会发这个事件；返回一个取消监听的函数。
+  async onIconReady(listener) {
+    const { listen } = await import('@tauri-apps/api/event')
+    const unlisten = await listen<{ appId: string; iconUrl: string }>(
+      ICON_READY_EVENT,
+      (event) => listener(event.payload),
+    )
+    return unlisten
+  },
 }

@@ -15,7 +15,7 @@ use crate::{
     storage::DataRepository,
 };
 
-use super::{icon::IconService, tree};
+use super::{favicon, icon::IconService, tree};
 
 // 分组树允许的最大深度；顶层分类下的直接分组算第 1 层。
 const MAX_GROUP_DEPTH: usize = 4;
@@ -171,8 +171,9 @@ pub fn add_app(state: &AppState, request: AddAppRequest) -> AppResult<AppEXE> {
     }
     let app_id = Uuid::new_v4().to_string();
 
-    // 只在这里持锁读取父节点和复制图标目录；后续系统操作不持有锁。
-    let icon_service = {
+    // 只在这里持锁读取父节点、找可复用的同源图标和复制图标目录；后续系统操作
+    // 不持有锁。
+    let (icon_service, reusable) = {
         let store = state.get_lock()?;
         let data = store.load_data()?;
         if let Some(parent_id) = &request.parent_id {
@@ -180,10 +181,24 @@ pub fn add_app(state: &AppState, request: AddAppRequest) -> AppResult<AppEXE> {
                 return Err(not_found("parent_not_found", "应用的父节点", parent_id));
             }
         }
-        IconService::from_store(&store)
+
+        // 同源复用：这个站点已经抓过图标的话，`prepare_app` 会直接复制一份，
+        // 新应用一落库就带着真实图标，连后台线程都不用起。
+        let reusable = match &source {
+            Source::Url(url) => reusable_url_icon(&data, url),
+            Source::LocalPath(_) => None,
+        };
+
+        (IconService::from_store(&store), reusable)
     };
 
-    let prepared = prepare_app(&source, request.name.as_deref(), &app_id, &icon_service)?;
+    let prepared = prepare_app(
+        &source,
+        request.name.as_deref(),
+        &app_id,
+        &icon_service,
+        reusable.as_deref(),
+    )?;
     let PreparedApp {
         name,
         working_dir,
@@ -229,6 +244,121 @@ pub fn add_app(state: &AppState, request: AddAppRequest) -> AppResult<AppEXE> {
     }
 
     Ok(app)
+}
+
+// 补抓一个网址应用的图标，拿到就回填进 `data.json`。
+//
+// 这是「添加网址」那条路径的后半段：应用已经先用内置图标落库了，这里在后台把
+// 真实图标补上并写回去。返回回填后的图标 URL，调用方据此通知前端刷新。
+//
+// 拿图标有两条路，**同源复用优先于联网**：这个站点之前抓过就直接复制一份缓存，
+// 抓不到才发请求。失败是常态（站点慢、不可达、没图标），调用方不该把它当错误
+// 处理 —— 只是这个应用继续用内置图标而已。
+pub fn refresh_url_icon(state: &AppState, app_id: &str) -> AppResult<Option<String>> {
+    // 只在持锁期间读一次网址、图标目录和可复用的同源图标；抓取本身不碰锁。
+    let (url, icon_service, reusable) = {
+        let store = state.get_lock()?;
+        let data = store.load_data()?;
+        let app = tree::find_app(&data, app_id)
+            .ok_or_else(|| not_found("app_not_found", "应用", app_id))?;
+
+        // 不是网址应用，或者已经有真实图标了（`prepare_app` 复用来的、或补抓过了）。
+        if !needs_url_icon(app) {
+            return Ok(None);
+        }
+
+        (
+            app.source_path.clone(),
+            IconService::from_store(&store),
+            reusable_url_icon(&data, &app.source_path),
+        )
+    };
+
+    // 同源复用优先于联网。
+    //
+    // 这条路覆盖「连着加两个同一站点的网址」：第一个还在后台抓，第二个进来时
+    // `prepare_app` 还看不到图标，但等到这里通常已经抓完了。慢站因此只会被抓一次。
+    let result = reusable
+        .and_then(|source_id| icon_service.copy_icon(&source_id, app_id))
+        .or_else(|| icon_service.fetch_url_icon(&url, app_id));
+
+    let Some(result) = result else {
+        return Ok(None);
+    };
+
+    let icon_url = IconService::asset_url(&result.cache_path);
+
+    // 回填要用一次原子事务：读取、改图标、落盘必须在同一把锁里，否则两个后台
+    // 任务同时完成时，后写入的会覆盖前一个。
+    let store = state.get_lock()?;
+    store.mutate_data(|data| {
+        let app = tree::find_app_mut(data, app_id)
+            .ok_or_else(|| not_found("app_not_found", "应用", app_id))?;
+        app.icon_url = icon_url.clone();
+        Ok(())
+    })?;
+
+    Ok(Some(icon_url))
+}
+
+// 网址应用是否还在等后台补图标。
+//
+// `add_app` 用它决定要不要起后台线程，`refresh_url_icon` 用它判断是否还有活干。
+// 两种情况都返回 `false`：不是网址应用；是网址应用但已经有真实图标了
+// （同源复用拿到的，或者后台已经补过）。
+pub fn needs_url_icon(app: &AppEXE) -> bool {
+    app.icon_type == IconType::Url && !has_real_icon(app)
+}
+
+// 这个应用是不是已经有一张真实图标，而不是内置的占位图。
+//
+// 占位图对本地应用不适用（它们的图标一定是从系统里提出来写进缓存的），所以这个
+// 判断只对网址应用有意义。
+fn has_real_icon(app: &AppEXE) -> bool {
+    app.icon_url != DEFAULT_URL_ICON_URL
+}
+
+// 找一个**同源**且已经抓到过图标的网址应用，把它当作复用的来源。
+//
+// 两个收益：连着加 5 个 GitHub 链接只会抓一次；同一站点在侧栏里长得必然一样
+// （各抓各的会因为重试时机不同而拿到不同尺寸的图标）。
+//
+// 只按「源」比对，不按 host 比对：`github.com` 和 `gist.github.com` 的图标本来
+// 就不一样，混用会让用户看到错的图。
+fn reusable_url_icon(data: &AppData, url: &str) -> Option<String> {
+    let origin = url_origin(url)?;
+    let mut source_id = None;
+
+    tree::for_each_app(data, &mut |app| {
+        // 已经找到就不用再往下走了。
+        if source_id.is_some() {
+            return;
+        }
+        // 还挂着内置图标的没有可复用的东西 —— 那说明它自己也没抓到。
+        if app.icon_type != IconType::Url || !has_real_icon(app) {
+            return;
+        }
+        if url_origin(&app.source_path).as_deref() == Some(origin.as_str()) {
+            source_id = Some(app.id.clone());
+        }
+    });
+
+    source_id
+}
+
+// 网址的「源」：scheme + host + port。拆不出来就返回 `None`（那就没法比对）。
+//
+// 端口要带上：`localhost:3000` 和 `localhost:5173` 是两个站点。host 统一小写，
+// 免得 `GitHub.com` 和 `github.com` 被当成两个源。
+fn url_origin(url: &str) -> Option<String> {
+    let parts = favicon::split_url(url)?;
+    let scheme = if parts.is_https { "https" } else { "http" };
+
+    Some(format!(
+        "{scheme}://{}:{}",
+        parts.host.to_ascii_lowercase(),
+        parts.port
+    ))
 }
 
 // 把一个应用移动到新位置（拖拽换位）。
@@ -368,27 +498,46 @@ fn prepare_app(
     requested_name: Option<&str>,
     app_id: &str,
     icon_service: &IconService,
+    reusable_icon: Option<&str>,
 ) -> AppResult<PreparedApp> {
     match source {
+        // 网址的图标**不在这里联网抓**。
+        //
+        // 实测平均 6.3 秒、最慢 18.3 秒（见 `dosc/图标抓取/probe-result.md`）：站点
+        // 慢或不可达时，每个候选都要耗满一次超时。同步抓会把「添加一个网址」卡成
+        // 十几秒，比少一张图标严重得多。
+        //
+        // 所以先用内置图标把应用落库，抓取放到后台线程，抓到了再回填（见
+        // `refresh_url_icon`）。用户看到的是「立刻多了一个应用，图标随后补上」。
+        //
+        // 唯一的例外是**同源复用**：`reusable_icon` 给了来源应用 ID 时，直接复制
+        // 一份本地缓存文件 —— 不联网，只是几 KB 的磁盘拷贝，不用挪到后台。
         Source::Url(url) => {
             let fallback = default_url_name(url);
-            // 先试着把站点的 favicon 抓下来，抓到就和本地程序一样有个真实图标。
-            // 抓不到（站点没图标、离线、超时）不影响添加，退回内置的地球图标。
-            let (icon_url, cache_path) = match icon_service.fetch_url_icon(url, app_id) {
-                Some(result) => (
-                    IconService::asset_url(&result.cache_path),
-                    Some(result.cache_path),
-                ),
-                None => (DEFAULT_URL_ICON_URL.to_owned(), None),
-            };
+            let name = choose_app_name(requested_name, &fallback)?;
+
+            if let Some(source_app_id) = reusable_icon {
+                if let Some(result) = icon_service.copy_icon(source_app_id, app_id) {
+                    let icon_url = IconService::asset_url(&result.cache_path);
+                    return Ok(PreparedApp {
+                        name,
+                        working_dir: None,
+                        arguments: None,
+                        icon_type: IconType::Url,
+                        icon_url,
+                        cache_path: Some(result.cache_path),
+                    });
+                }
+                // 复制失败不致命：退回内置图标，后台补抓会兜住。
+            }
 
             Ok(PreparedApp {
-                name: choose_app_name(requested_name, &fallback)?,
+                name,
                 working_dir: None,
                 arguments: None,
                 icon_type: IconType::Url,
-                icon_url,
-                cache_path,
+                icon_url: DEFAULT_URL_ICON_URL.to_owned(),
+                cache_path: None,
             })
         }
         Source::LocalPath(source_path) if path::is_shortcut(source_path) => {
@@ -545,15 +694,29 @@ fn remove_cached_icon(path: Option<&Path>) {
     }
 }
 
-// 删除已经从数据树中移除的节点所对应的图标缓存。
+// 关闭应用并清理其图标缓存。
 //
-// 图标文件名由后端生成并固定为 `{app_id}.png`，因此只清理这个约定
+// 网址图标现在可能是 png 或 svg，`remove_app_icon` 会把两种扩展名都清掉。
+//
+// 图标文件名由后端生成，形状固定为 `{app_id}.{png|svg}`，因此只清理这个约定
 // 下的文件，不直接信任 JSON 中可能被修改的任意路径。
+//
+// 两个扩展名都要清：本地应用的图标是位图（`.png`），网址应用解不出位图时会把
+// SVG 原文按 `.svg` 落盘。只删一个会留下另一种孤儿。
 fn cleanup_category_icons(category: &Category, icons_dir: &Path) {
     // 复用树模块那份遍历，嵌套分组交给它去钻。
     tree::for_each_in_items(&category.groups, &mut |item| {
         remove_app_icon(item, icons_dir)
     });
+}
+
+// 应用可能占用的图标缓存路径。png 和 svg 是互斥的（同一时刻只有一个），
+// 但删的时候两个都试一遍最省事 —— 少一次判断，也多一层保险。
+fn icon_cache_paths(icons_dir: &Path, app_id: &str) -> [PathBuf; 2] {
+    [
+        icons_dir.join(format!("{app_id}.png")),
+        icons_dir.join(format!("{app_id}.svg")),
+    ]
 }
 
 fn remove_app_icon(item: &Item, icons_dir: &Path) {
@@ -564,26 +727,27 @@ fn remove_app_icon(item: &Item, icons_dir: &Path) {
     // `icon_url` 是给 WebView 使用的 URL，可能已经把磁盘路径 percent-encode，
     // 不能把它当作本地 Path 解析。缓存文件名由后端按 app.id 生成，因此这里
     // 直接使用受信任的 ID。
-    let path = icons_dir.join(format!("{}.png", app.id));
-
-    // 删除失败不能静默吞掉：Windows 上文件被其他进程占用时删除会失败，留下的
-    // 孤儿只能靠 `sweep_orphan_icons` 兜底，这里至少留下线索。`NotFound` 属于
-    // 正常情况（URL 应用本来就没有图标文件），不算失败。
-    if let Err(error) = std::fs::remove_file(&path) {
-        if error.kind() != std::io::ErrorKind::NotFound {
-            log::warn!("清理图标缓存失败 {}: {error}", path.display());
+    for path in icon_cache_paths(icons_dir, &app.id) {
+        // 删除失败不能静默吞掉：Windows 上文件被其他进程占用时删除会失败，留下的
+        // 孤儿只能靠 `sweep_orphan_icons` 兜底，这里至少留下线索。`NotFound` 属于
+        // 正常情况（URL 应用本来就没有图标文件），不算失败。
+        if let Err(error) = std::fs::remove_file(&path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                log::warn!("清理图标缓存失败 {}: {error}", path.display());
+            }
         }
     }
 }
 
-// 启动时对账图标缓存，删除不再被任何应用引用的 `{UUID}.png`。
+// 启动时对账图标缓存，删除不再被任何应用引用的 `{UUID}.png` / `{UUID}.svg`。
 //
 // 正常路径下删除应用/分组/分类都会同步清掉图标，所以这个对账只兜异常情况：
-// 进程在「写完 PNG」和「提交 data.json」之间崩溃、或删除时文件被占用而失败。
+// 进程在「写完文件」和「提交 data.json」之间崩溃、或删除时文件被占用而失败。
 // 这类孤儿没有任何界面能反映出来，不对账就会一直堆积。
 //
-// 只处理严格符合 `{UUID}.png` 的文件 —— 图标文件名由后端按 app.id 生成，
-// 不符合这个形状的文件不是本程序写的，一律不动，避免误删用户自己的东西。
+// 只处理严格符合 `{UUID}.png` / `{UUID}.svg` 的文件 —— 图标文件名由后端按
+// app.id 生成，不符合这个形状的文件不是本程序写的，一律不动，避免误删用户
+// 自己的东西。
 //
 // 返回被删除的文件名（如 `{uuid}.png`），供调用方记录日志。
 pub fn sweep_orphan_icons(state: &AppState) -> AppResult<Vec<String>> {
@@ -610,7 +774,11 @@ pub fn sweep_orphan_icons(state: &AppState) -> AppResult<Vec<String>> {
     for entry in entries.flatten() {
         let path = entry.path();
 
-        if path.extension().and_then(|extension| extension.to_str()) != Some("png") {
+        let extension = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase);
+        if !matches!(extension.as_deref(), Some("png") | Some("svg")) {
             continue;
         }
 

@@ -84,16 +84,44 @@ impl IconService {
     // 届时由 `prepare_app` 退回内置图标。这里记一条 debug 日志，方便排查
     // 「为什么这个站点没图标」。
     pub(crate) fn fetch_url_icon(&self, url: &str, app_id: &str) -> Option<IconExtractionResult> {
+        // SVG 走另一条存盘路径：不解码，原文字节按 `.svg` 落盘。
         match favicon::fetch_icon(url) {
-            Ok(image) => match self.extractor.save_image(app_id, image) {
+            Ok(favicon::FetchedIcon::Bitmap(image)) => {
+                match self.extractor.save_image(app_id, image) {
+                    Ok(result) => Some(result),
+                    Err(error) => {
+                        log::debug!("保存 {} 的网址图标失败: {}", url, error.message);
+                        None
+                    }
+                }
+            }
+            Ok(favicon::FetchedIcon::Svg(bytes)) => match self.extractor.save_svg(app_id, &bytes) {
                 Ok(result) => Some(result),
                 Err(error) => {
-                    log::debug!("保存 {} 的网址图标失败: {}", url, error.message);
+                    log::debug!("保存 {} 的 SVG 图标失败: {}", url, error.message);
                     None
                 }
             },
             Err(error) => {
                 log::debug!("抓取 {} 的网址图标失败: {}", url, error.message);
+                None
+            }
+        }
+    }
+
+    // 复用另一个应用的图标缓存。
+    //
+    // 同源站点第二次添加时走这条路，省掉一次网络抓取。失败返回 `None` 而不是抛错：
+    // 复用只是优化，拿不到就退回内置图标、交给后台补抓，不该让「添加应用」失败。
+    pub(crate) fn copy_icon(
+        &self,
+        source_app_id: &str,
+        app_id: &str,
+    ) -> Option<IconExtractionResult> {
+        match self.extractor.copy_icon(source_app_id, app_id) {
+            Ok(result) => Some(result),
+            Err(error) => {
+                log::debug!("复用 {source_app_id} 的图标失败: {}", error.message);
                 None
             }
         }
