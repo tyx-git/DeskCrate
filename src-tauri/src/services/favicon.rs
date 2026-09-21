@@ -72,6 +72,29 @@ pub(crate) fn fetch_icon(url: &str) -> AppResult<FetchedIcon> {
 /// 正常抓取传一个随即丢弃的 `Vec`，代价只有一点记账。
 fn fetch_icon_into(url: &str, log: &mut Vec<ProbeStep>) -> AppResult<FetchedIcon> {
     let mut budget = Budget::new(TOTAL_BUDGET_MS);
+    let mut last_error = AppError::new("favicon_unavailable", "没有可用的网址图标".to_owned());
+
+    // 少数站点把图标放在自己控制的静态资源域名上，首页反而会被反爬挡住。
+    // 先试这些一方已知地址，命中后连首页都不用请求；这正是 GitHub 的情况：
+    // github.com/favicon.ico 会返回 403，但 github.githubassets.com/favicons/favicon.svg
+    // 是官方静态资源且可直接取到。
+    for candidate in well_known_candidates(url) {
+        match fetch_image(&candidate.url, log, &mut budget) {
+            Ok(icon) => {
+                log.push(ProbeStep::note(
+                    "result",
+                    &candidate.url,
+                    "命中一方已知地址，结束",
+                ));
+                return Ok(icon);
+            }
+            Err(error) => {
+                log::debug!("一方已知图标 {} 不可用: {}", candidate.url, error.message);
+                last_error = error;
+            }
+        }
+    }
+
     let declared = declared_candidates(url, log, &mut budget);
     // 约定路径是**另一段**：声明的候选最多试 `MAX_CANDIDATES` 个，试完还没拿到才
     // 轮到它们。合成一条链的话，一个声明了 3 个图标却全都拿不到的站点就永远轮不
@@ -81,8 +104,6 @@ fn fetch_icon_into(url: &str, log: &mut Vec<ProbeStep>) -> AppResult<FetchedIcon
         .iter()
         .take(MAX_CANDIDATES)
         .chain(conventions.iter());
-
-    let mut last_error = AppError::new("favicon_unavailable", "没有可用的网址图标".to_owned());
 
     // `attempted` 是当前候选的下标：0 表示还一个都没试过。
     for (attempted, candidate) in chain.enumerate() {
@@ -396,6 +417,33 @@ fn format_rank(declared_type: Option<&str>, url: &str) -> u8 {
     } else {
         FORMAT_LEGACY
     }
+}
+
+/// 少数大型站点会把图标放在自己的静态资源域名上，首页或根 favicon 可能被反爬挡住。
+///
+/// 这里只放**明确属于站点本身**的已知地址，不是公共 favicon 服务，也不会把任意域名
+/// 发送给第三方。候选排在首页声明之前，是为了让 GitHub 这种首页 403 的站点仍能取到
+/// 官方图标；其他站点返回空列表，继续走普通链路。
+fn well_known_candidates(url: &str) -> Vec<Candidate> {
+    let authority = authority_of(url.split_once("://").map(|(_, rest)| rest).unwrap_or(url));
+    let host = authority
+        .rsplit('@')
+        .next()
+        .unwrap_or(authority)
+        .split(':')
+        .next()
+        .unwrap_or(authority)
+        .to_ascii_lowercase();
+
+    if host == "github.com" || host == "www.github.com" {
+        return vec![Candidate {
+            edge: ICON_MAX_EDGE,
+            format: FORMAT_SVG,
+            url: "https://github.githubassets.com/favicons/favicon.svg".to_owned(),
+        }];
+    }
+
+    Vec::new()
 }
 
 /// 站点约定路径：即使页面什么都没声明，这些位置也可能有图标。
@@ -870,6 +918,17 @@ mod tests {
     /// 只比地址，不比排序信息 —— 质量字段单独有用例覆盖。
     fn urls_of(candidates: &[Candidate]) -> Vec<&str> {
         candidates.iter().map(|c| c.url.as_str()).collect()
+    }
+
+    #[test]
+    fn well_known_candidates_handles_github_official_asset() {
+        let candidates = well_known_candidates("https://github.com/org/repo");
+        assert_eq!(
+            urls_of(&candidates),
+            vec!["https://github.githubassets.com/favicons/favicon.svg"]
+        );
+        assert!(well_known_candidates("https://gist.github.com").is_empty());
+        assert!(well_known_candidates("https://example.com").is_empty());
     }
 
     #[test]
