@@ -345,7 +345,10 @@ fn delete_item(
         (removed, store.icons_path().to_path_buf())
     };
 
-    cleanup_item_icons(&removed, &icons_dir);
+    // 被摘掉的节点可能是一个分组（里面还挂着后代应用），所以要递归清理。
+    tree::for_each_in_items(std::slice::from_ref(&removed), &mut |item| {
+        remove_app_icon(item, &icons_dir)
+    });
     Ok(())
 }
 
@@ -547,33 +550,28 @@ fn remove_cached_icon(path: Option<&Path>) {
 // 图标文件名由后端生成并固定为 `{app_id}.png`，因此只清理这个约定
 // 下的文件，不直接信任 JSON 中可能被修改的任意路径。
 fn cleanup_category_icons(category: &Category, icons_dir: &Path) {
-    for item in &category.groups {
-        cleanup_item_icons(item, icons_dir);
-    }
+    // 复用树模块那份遍历，嵌套分组交给它去钻。
+    tree::for_each_in_items(&category.groups, &mut |item| {
+        remove_app_icon(item, icons_dir)
+    });
 }
 
-fn cleanup_item_icons(item: &Item, icons_dir: &Path) {
-    match item {
-        Item::App(app) => {
-            let expected_name = format!("{}.png", app.id);
-            // `icon_url` 是给 WebView 使用的 URL，可能已经把磁盘路径
-            // percent-encode，不能把它当作本地 Path 解析。缓存文件名
-            // 由后端按 app.id 生成，因此这里直接使用受信任的 ID。
-            let path = icons_dir.join(expected_name);
+fn remove_app_icon(item: &Item, icons_dir: &Path) {
+    let Item::App(app) = item else {
+        return;
+    };
 
-            // 删除失败不能静默吞掉：Windows 上文件被其他进程占用时删除会失败，
-            // 留下的孤儿只能靠 `sweep_orphan_icons` 兜底，这里至少留下线索。
-            // `NotFound` 属于正常情况（URL 应用本来就没有图标文件），不算失败。
-            if let Err(error) = std::fs::remove_file(&path) {
-                if error.kind() != std::io::ErrorKind::NotFound {
-                    log::warn!("清理图标缓存失败 {}: {error}", path.display());
-                }
-            }
-        }
-        Item::Group(group) => {
-            for child in &group.children {
-                cleanup_item_icons(child, icons_dir);
-            }
+    // `icon_url` 是给 WebView 使用的 URL，可能已经把磁盘路径 percent-encode，
+    // 不能把它当作本地 Path 解析。缓存文件名由后端按 app.id 生成，因此这里
+    // 直接使用受信任的 ID。
+    let path = icons_dir.join(format!("{}.png", app.id));
+
+    // 删除失败不能静默吞掉：Windows 上文件被其他进程占用时删除会失败，留下的
+    // 孤儿只能靠 `sweep_orphan_icons` 兜底，这里至少留下线索。`NotFound` 属于
+    // 正常情况（URL 应用本来就没有图标文件），不算失败。
+    if let Err(error) = std::fs::remove_file(&path) {
+        if error.kind() != std::io::ErrorKind::NotFound {
+            log::warn!("清理图标缓存失败 {}: {error}", path.display());
         }
     }
 }
@@ -641,21 +639,12 @@ pub fn sweep_orphan_icons(state: &AppState) -> AppResult<Vec<String>> {
 //
 // 顶层应用也要算进去：漏了它们，孤儿对账会把这些图标当成没人引用的垃圾删掉。
 fn collect_app_ids(data: &AppData) -> HashSet<String> {
-    fn walk(items: &[Item], ids: &mut HashSet<String>) {
-        for item in items {
-            match item {
-                Item::App(app) => {
-                    ids.insert(app.id.clone());
-                }
-                Item::Group(group) => walk(&group.children, ids),
-            }
-        }
-    }
-
     let mut ids: HashSet<String> = data.root_apps().map(|app| app.id.clone()).collect();
-    for category in data.root_categories() {
-        walk(&category.groups, &mut ids);
-    }
+    tree::for_each_item(data, &mut |item| {
+        if let Item::App(app) = item {
+            ids.insert(app.id.clone());
+        }
+    });
     ids
 }
 

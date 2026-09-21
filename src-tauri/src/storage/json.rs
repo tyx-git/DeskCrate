@@ -214,11 +214,10 @@ fn is_corrupt_json(error: &AppError) -> bool {
 // 默认值。时间戳用 `%Y%m%d-%H%M%S` 而不是 RFC 3339 —— 后者带冒号和加号，在
 // Windows 上不是合法文件名字符。重建之后文件就是合法的了，所以这个名字不会堆积。
 fn quarantine(path: &Path) -> AppResult<PathBuf> {
-    let backup = path.with_file_name(format!(
-        "{}.corrupt-{}",
-        file_name(path)?,
-        Utc::now().format("%Y%m%d-%H%M%S")
-    ));
+    let backup = corrupt_backup_path(
+        path,
+        &format!(".corrupt-{}", Utc::now().format("%Y%m%d-%H%M%S")),
+    )?;
     fs::rename(path, &backup)?;
     Ok(backup)
 }
@@ -228,9 +227,14 @@ fn quarantine(path: &Path) -> AppResult<PathBuf> {
 // 副本名固定而不带时间戳：原文件还在，每次启动都会再走一遍这条路径，带时间戳会让
 // 目录里堆满内容相同的副本。
 fn copy_aside(path: &Path) -> AppResult<PathBuf> {
-    let backup = path.with_file_name(format!("{}.corrupt", file_name(path)?));
+    let backup = corrupt_backup_path(path, ".corrupt")?;
     fs::copy(path, &backup)?;
     Ok(backup)
+}
+
+/// 损坏文件的副本名：原名字后面接一个后缀，落在同一个目录里。
+fn corrupt_backup_path(path: &Path, suffix: &str) -> AppResult<PathBuf> {
+    Ok(path.with_file_name(format!("{}{suffix}", file_name(path)?)))
 }
 
 fn file_name(path: &Path) -> AppResult<String> {

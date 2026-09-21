@@ -54,6 +54,13 @@ interface UiState {
   draggingAppId: string | null
   /** 当前悬停的落点。 */
   dropHint: DropHint | null
+  /**
+   * 设置页是否打开。
+   *
+   * 打开时侧栏主体换成设置页（同一个面板内切换），而不是再叠一层弹窗 —— 侧栏
+   * 只有 338px 宽，套一层模态会把内容挤得没法看。
+   */
+  settingsOpen: boolean
 
   setQuery: (query: string) => void
   setSelectedAppId: (id: string | null) => void
@@ -65,6 +72,7 @@ interface UiState {
   dismissNotice: () => void
   setDraggingApp: (id: string | null) => void
   setDropHint: (hint: DropHint | null) => void
+  setSettingsOpen: (open: boolean) => void
 }
 
 let noticeSeq = 0
@@ -78,6 +86,7 @@ export const useUiStore = create<UiState>((set) => ({
   notice: null,
   draggingAppId: null,
   dropHint: null,
+  settingsOpen: false,
 
   setQuery: (query) => set({ query, selectedAppId: null }),
   setSelectedAppId: (selectedAppId) => set({ selectedAppId }),
@@ -102,4 +111,7 @@ export const useUiStore = create<UiState>((set) => ({
 
   setDraggingApp: (draggingAppId) => set({ draggingAppId, dropHint: null }),
   setDropHint: (dropHint) => set({ dropHint }),
+  // 打开设置页时顺手收掉右键菜单和对话框，避免两层浮层叠在一起。
+  setSettingsOpen: (settingsOpen) =>
+    set(settingsOpen ? { settingsOpen, contextMenu: null, dialog: null } : { settingsOpen }),
 }))

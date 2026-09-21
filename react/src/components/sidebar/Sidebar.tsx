@@ -2,6 +2,7 @@ import { locateNode, type NodeLocation } from '../../lib/tree'
 import { useCatalogStore } from '../../state/catalogStore'
 import { useUiStore } from '../../state/uiStore'
 import type { AppEXE } from '../../types/catalog'
+import { SettingsPanel } from './SettingsPanel'
 import { SidebarBody } from './SidebarBody'
 import { SidebarFooter } from './SidebarFooter'
 import { SidebarHeader } from './SidebarHeader'
@@ -31,6 +32,7 @@ export function Sidebar({
   const setSelectedAppId = useUiStore((state) => state.setSelectedAppId)
   const openContextMenu = useUiStore((state) => state.openContextMenu)
   const openDialog = useUiStore((state) => state.openDialog)
+  const settingsOpen = useUiStore((state) => state.settingsOpen)
 
   const actions: TreeActions = {
     selectedAppId,
@@ -66,9 +68,16 @@ export function Sidebar({
   return (
     <TreeProvider actions={actions}>
       <div className="group/panel flex h-full w-full flex-col overflow-hidden rounded-panel bg-panel shadow-panel backdrop-blur-glass">
-        <SidebarHeader />
-        <SidebarBody activeDropIndex={activeDropIndex} isDragging={isDragging} />
-        <SidebarFooter />
+        {settingsOpen ? (
+          // 设置页顶掉主体与底栏；头部也换掉，因为搜索框在设置页里没有意义。
+          <SettingsPanel />
+        ) : (
+          <>
+            <SidebarHeader />
+            <SidebarBody activeDropIndex={activeDropIndex} isDragging={isDragging} />
+            <SidebarFooter />
+          </>
+        )}
       </div>
     </TreeProvider>
   )

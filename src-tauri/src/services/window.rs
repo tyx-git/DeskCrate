@@ -328,7 +328,7 @@ fn clamp_into_work_area<R: tauri::Runtime>(
 
 // `to_physical` 的带符号版本：窗口坐标允许为负数（多显示器时主屏左侧为负）。
 fn to_physical_i32(css_px: i32, scale_factor: f64) -> i32 {
-    (css_px as f64 * scale_factor).round() as i32
+    scale_px(css_px as f64, scale_factor) as i32
 }
 
 // `RunEvent::WindowEvent` 的 `Resized` 分支入口。
@@ -679,14 +679,23 @@ fn scale(total: u32, percent: f32) -> u32 {
 // 装不下，内容盒被压成 0 —— 指示条在屏幕上完全不可见，用户也就无从点它回到
 // 展开态。
 fn to_physical(css_px: u32, scale_factor: f64) -> u32 {
-    (css_px as f64 * scale_factor).round() as u32
+    scale_px(css_px as f64, scale_factor) as u32
+}
+
+// 三个换算（无符号/带符号/反向）共用这一条规则。
+//
+// 取整方式必须只有一处：`.round()` 与截断在 1.5 倍缩放下会差出一个像素，而尺寸
+// 与位置是用同一批常量算出来的，一处截断一处四舍五入会让窗口比设计稿歪一点，
+// 这种偏差在真机上极难归因。
+fn scale_px(value: f64, factor: f64) -> f64 {
+    (value * factor).round()
 }
 
 // `to_physical` 的逆运算：把物理像素换算回设计稿的 CSS 像素。
 //
 // 用户尺寸覆盖要按 CSS 像素落盘，而窗口上报的是物理像素，记录时就得换回来。
 fn to_css(physical_px: u32, scale_factor: f64) -> u32 {
-    (physical_px as f64 / scale_factor).round() as u32
+    scale_px(physical_px as f64, 1.0 / scale_factor) as u32
 }
 
 // 读取窗口所在显示器的缩放比。

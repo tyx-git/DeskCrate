@@ -223,14 +223,81 @@ pub(crate) fn parent_depth(data: &AppData, id: &str) -> Option<usize> {
         .find_map(|category| find_group_depth(&category.groups, id, 1))
 }
 
+// —— 遍历：整棵树只保留两份递归，其余查找都建立在它们之上 ——
+//
+// 「按深度优先走一遍分组树」这件事曾经被抄了五遍（找分组、找应用、算深度、
+// 删除、统计）。每抄一遍就多一处「忘了往嵌套分组里钻」的风险，而这类漏只对
+// 一半的实现，症状往往是很久以后才在某个三级分组上暴露出来。
+
+/**
+ * 深度优先遍历一层节点（含嵌套分组），返回第一个 `visit` 给出的非 `None` 结果。
+ *
+ * `depth` 是当前层级的深度，从 0 起；只关心节点本身的调用方传 0 即可。
+ */
+fn find_in_items<'a, T>(
+    items: &'a [Item],
+    depth: usize,
+    visit: &mut impl FnMut(&'a Item, usize) -> Option<T>,
+) -> Option<T> {
+    for item in items {
+        if let Some(found) = visit(item, depth) {
+            return Some(found);
+        }
+
+        if let Item::Group(group) = item {
+            if let Some(found) = find_in_items(&group.children, depth + 1, visit) {
+                return Some(found);
+            }
+        }
+    }
+
+    None
+}
+
+/// 深度优先遍历一层节点（含嵌套分组），对每个节点调用 `visit`。
+pub(crate) fn for_each_in_items(items: &[Item], visit: &mut impl FnMut(&Item)) {
+    for item in items {
+        visit(item);
+        if let Item::Group(group) = item {
+            for_each_in_items(&group.children, visit);
+        }
+    }
+}
+
+/// 对整棵树的每个节点调用 `visit`（顶层应用不在这个范围里，它们是根节点上的行）。
+pub(crate) fn for_each_item(data: &AppData, visit: &mut impl FnMut(&Item)) {
+    for category in data.root_categories() {
+        for_each_in_items(&category.groups, visit);
+    }
+}
+
 fn find_group_in_items<'a>(items: &'a [Item], id: &str) -> Option<&'a Group> {
-    items.iter().find_map(|item| match item {
+    find_in_items(items, 0, &mut |item, _| match item {
         Item::Group(group) if group.id == id => Some(group),
-        Item::Group(group) => find_group_in_items(&group.children, id),
-        Item::App(_) => None,
+        _ => None,
     })
 }
 
+fn find_app_in_items<'a>(items: &'a [Item], id: &str) -> Option<&'a AppEXE> {
+    find_in_items(items, 0, &mut |item, _| match item {
+        Item::App(app) if app.id == id => Some(app),
+        _ => None,
+    })
+}
+
+fn find_group_depth(items: &[Item], id: &str, depth: usize) -> Option<usize> {
+    find_in_items(items, depth, &mut |item, at| match item {
+        Item::Group(group) if group.id == id => Some(at),
+        _ => None,
+    })
+}
+
+// 下面两个可变版本**故意**各自保留一份递归，没有合并进 `find_in_items`：
+//
+// 可变遍历要返回 `&'a mut`，而在循环里反复 `split_at_mut` 借出的子切片活不到
+// `'a`（下一次迭代还要用 `items`），借不出来就没法把同一个闭包往下传。这是借用
+// 检查器的硬约束，硬凑只会让代码更难读。它们的风险由 `find_in_items` 那一侧
+// 的测试共同覆盖（同一棵树、同一套 ID）。
 fn find_group_in_items_mut<'a>(items: &'a mut [Item], id: &str) -> Option<&'a mut Group> {
     for item in items {
         if let Item::Group(group) = item {
@@ -248,14 +315,6 @@ fn find_group_in_items_mut<'a>(items: &'a mut [Item], id: &str) -> Option<&'a mu
     None
 }
 
-fn find_app_in_items<'a>(items: &'a [Item], id: &str) -> Option<&'a AppEXE> {
-    items.iter().find_map(|item| match item {
-        Item::App(app) if app.id == id => Some(app),
-        Item::App(_) => None,
-        Item::Group(group) => find_app_in_items(&group.children, id),
-    })
-}
-
 fn find_app_in_items_mut<'a>(items: &'a mut [Item], id: &str) -> Option<&'a mut AppEXE> {
     for item in items {
         match item {
@@ -266,22 +325,6 @@ fn find_app_in_items_mut<'a>(items: &'a mut [Item], id: &str) -> Option<&'a mut 
                     return Some(found);
                 }
             }
-        }
-    }
-
-    None
-}
-
-fn find_group_depth(items: &[Item], id: &str, depth: usize) -> Option<usize> {
-    for item in items {
-        match item {
-            Item::Group(group) if group.id == id => return Some(depth),
-            Item::Group(group) => {
-                if let Some(found) = find_group_depth(&group.children, id, depth + 1) {
-                    return Some(found);
-                }
-            }
-            Item::App(_) => {}
         }
     }
 
