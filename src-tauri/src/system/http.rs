@@ -21,7 +21,11 @@ use windows::Win32::Networking::WinHttp::{
     WINHTTP_OPEN_REQUEST_FLAGS, WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_STATUS_CODE,
 };
 
-use crate::{error::AppResult, models::AppError};
+use crate::{
+    error::AppResult,
+    models::AppError,
+    system::{support, wide},
+};
 
 // 一次 GET 的上限与超时。
 //
@@ -58,10 +62,10 @@ pub(crate) fn get(
     max_bytes: usize,
     timeout_ms: i32,
 ) -> AppResult<HttpResponse> {
-    let agent = to_wide(USER_AGENT);
-    let server = to_wide(url.host);
-    let path = to_wide(url.path_and_query);
-    let method = to_wide("GET");
+    let agent = wide::to_wide(USER_AGENT);
+    let server = wide::to_wide(url.host);
+    let path = wide::to_wide(url.path_and_query);
+    let method = wide::to_wide("GET");
 
     unsafe {
         // 会话 -> 连接 -> 请求，三级句柄都必须关掉；用 `Handle` 包一层，
@@ -103,12 +107,12 @@ pub(crate) fn get(
             timeout_ms,
             timeout_ms,
         )
-        .map_err(|error| windows_error("http_timeout_failed", error))?;
+        .map_err(|error| support::windows_error("http_timeout_failed", error))?;
 
         WinHttpSendRequest(request.get(), None, None, 0, 0, 0)
-            .map_err(|error| windows_error("http_send_failed", error))?;
+            .map_err(|error| support::windows_error("http_send_failed", error))?;
         WinHttpReceiveResponse(request.get(), std::ptr::null_mut())
-            .map_err(|error| windows_error("http_receive_failed", error))?;
+            .map_err(|error| support::windows_error("http_receive_failed", error))?;
 
         let status = query_status(request.get())?;
         let body = read_body(request.get(), max_bytes)?;
@@ -140,7 +144,7 @@ unsafe fn query_status(request: *mut c_void) -> AppResult<u32> {
             std::ptr::addr_of_mut!(length),
             std::ptr::null_mut(),
         )
-        .map_err(|error| windows_error("http_status_failed", error))?;
+        .map_err(|error| support::windows_error("http_status_failed", error))?;
     }
 
     Ok(status)
@@ -162,13 +166,20 @@ unsafe fn read_body(request: *mut c_void, max_bytes: usize) -> AppResult<Vec<u8>
         let mut available: u32 = 0;
         unsafe {
             WinHttpQueryDataAvailable(request, std::ptr::addr_of_mut!(available))
-                .map_err(|error| windows_error("http_query_length_failed", error))?;
+                .map_err(|error| support::windows_error("http_query_length_failed", error))?;
         }
         if available == 0 {
             break;
         }
 
-        let to_read = available as usize;
+        // `buffer` 是固定大小的堆缓冲区，不能把 WinHTTP 报告的完整可用
+        // 长度直接传进去；响应块可能明显大于 16 KiB。
+        let to_read = (available as usize)
+            .min(buffer.len())
+            .min(max_bytes.saturating_sub(body.len()));
+        if to_read == 0 {
+            break;
+        }
         let mut read: u32 = 0;
         unsafe {
             WinHttpReadData(
@@ -177,7 +188,7 @@ unsafe fn read_body(request: *mut c_void, max_bytes: usize) -> AppResult<Vec<u8>
                 u32::try_from(to_read).unwrap_or(u32::MAX),
                 std::ptr::addr_of_mut!(read),
             )
-            .map_err(|error| windows_error("http_read_failed", error))?;
+            .map_err(|error| support::windows_error("http_read_failed", error))?;
         }
         if read == 0 {
             break;
@@ -222,15 +233,4 @@ impl Drop for Handle {
             }
         }
     }
-}
-
-// WinHTTP 的三级句柄都在同一线程里创建和使用，不需要跨线程。
-unsafe impl Send for Handle {}
-
-fn to_wide(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain(std::iter::once(0)).collect()
-}
-
-fn windows_error(code: &'static str, error: windows::core::Error) -> AppError {
-    AppError::new(code, error.to_string())
 }

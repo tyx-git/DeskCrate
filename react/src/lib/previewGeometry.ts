@@ -1,5 +1,6 @@
 import { OVERLAY_HEIGHT_MAX, OVERLAY_HEIGHT_MIN, OVERLAY_WIDTH_MAX, OVERLAY_WIDTH_MIN } from './overlaySize'
 import type { ViewMode } from '../types/settings'
+import { WINDOW_SPEC } from '../spec/windowSpec'
 
 /**
  * 浏览器预览用的窗口几何计算。
@@ -16,15 +17,6 @@ import type { ViewMode } from '../types/settings'
  * 收起态窗口会因此只剩 19 个物理像素宽，装不下 16px 留白，指示条被压成
  * 0 宽而彻底消失。
  */
-const SHADOW_GUTTER = 16
-const SIDEBAR_LEFT = 2
-const SIDEBAR_WIDTH_PERCENT = 18.75
-const SIDEBAR_HEIGHT_PERCENT = 50
-const SIDEBAR_TOP_PERCENT = 12.5
-const STRIP_TOP_PERCENT = 12.5
-const STRIP_WIDTH = 3
-const STRIP_HEIGHT = 80
-
 export interface PreviewBox {
   left: number
   top: number
@@ -43,24 +35,24 @@ export function previewWindowBox(
   const [panelLeft, panelTop, panelWidth, panelHeight] =
     viewMode === 'expanded'
       ? [
-          SIDEBAR_LEFT,
-          (sceneHeight * SIDEBAR_TOP_PERCENT) / 100,
-          clamp((sceneWidth * SIDEBAR_WIDTH_PERCENT) / 100, OVERLAY_WIDTH_MIN, OVERLAY_WIDTH_MAX),
-          clamp((sceneHeight * SIDEBAR_HEIGHT_PERCENT) / 100, OVERLAY_HEIGHT_MIN, OVERLAY_HEIGHT_MAX),
+          WINDOW_SPEC.sidebarLeftPx,
+          (sceneHeight * WINDOW_SPEC.sidebarTopPercent) / 100,
+          clamp((sceneWidth * WINDOW_SPEC.sidebarWidthPercent) / 100, OVERLAY_WIDTH_MIN, OVERLAY_WIDTH_MAX),
+          clamp((sceneHeight * WINDOW_SPEC.sidebarHeightPercent) / 100, OVERLAY_HEIGHT_MIN, OVERLAY_HEIGHT_MAX),
         ]
       : [
           0,
-          (sceneHeight * STRIP_TOP_PERCENT) / 100,
-          STRIP_WIDTH,
-          STRIP_HEIGHT,
+          (sceneHeight * WINDOW_SPEC.collapsedStripTopPercent) / 100,
+          WINDOW_SPEC.collapsedStripWidthPx,
+          WINDOW_SPEC.collapsedStripHeightPx,
         ]
 
   return {
     // 窗口左边缘贴场景左边缘：面板自身的 2px 左边距由 `.dc-window-expanded`
     // 的 padding-left 提供，`panelLeft` 只参与窗口宽度计算。
     left: 0,
-    top: panelTop - SHADOW_GUTTER,
-    width: panelLeft + panelWidth + SHADOW_GUTTER,
-    height: panelHeight + SHADOW_GUTTER * 2,
+    top: panelTop - WINDOW_SPEC.overlayShadowGutterPx,
+    width: panelLeft + panelWidth + WINDOW_SPEC.overlayShadowGutterPx,
+    height: panelHeight + WINDOW_SPEC.overlayShadowGutterPx * 2,
   }
 }

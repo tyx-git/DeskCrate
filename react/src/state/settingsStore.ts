@@ -34,6 +34,7 @@ interface SettingsStore {
 let collapseTimer: number | undefined
 
 const FALLBACK: Settings = {
+  revision: 0,
   theme: 'default',
   window: { isInitialized: false, position: null, size: null, sizeOverride: null },
   viewMode: 'expanded',
@@ -41,6 +42,7 @@ const FALLBACK: Settings = {
   autoStart: false,
 }
 
+// 设置页使用字段级 Command；兼容的整体更新由后端 revision 冲突保护。
 export const useSettingsStore = create<SettingsStore>((set, get) => ({
   settings: null,
   viewMode: 'expanded',
@@ -137,9 +139,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   },
 
   async resetWindowSize() {
-    // 尺寸覆盖是后端在捕获到拖拽时直接写进配置的，前端手里的副本不会跟着
-    // 更新，所以这里必须先读一次最新配置：`updateSettings` 是整体替换，
-    // 拿旧副本去写会把后端刚存好的窗口位置和尺寸一起覆盖回去。
+    // 尺寸覆盖是后端在捕获到拖拽时直接写进配置的；清除时只更新这个字段，
+    // 不会用旧的完整 Settings 快照覆盖窗口位置和尺寸。
     try {
       const fresh = await backend.getSettings()
       if (!fresh.window.sizeOverride) {
@@ -150,10 +151,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
         return
       }
 
-      const saved = await backend.updateSettings({
-        ...fresh,
-        window: { ...fresh.window, sizeOverride: null },
-      })
+      const saved = await backend.clearWindowSizeOverride()
       set({ settings: saved })
       await backend.applyViewMode(get().viewMode)
     } catch (error) {
@@ -167,13 +165,13 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       return
     }
 
-    const next: Settings = { ...settings, autoCollapse }
-    set({ settings: next })
+    const previous = settings
+    set({ settings: { ...settings, autoCollapse } })
     try {
-      const saved = await backend.updateSettings(next)
+      const saved = await backend.updateAutoCollapse(autoCollapse)
       set({ settings: saved })
     } catch (error) {
-      set({ settings })
+      set({ settings: previous })
       useUiStore.getState().notify('error', `保存配置失败：${describeError(toAppError(error))}`)
     }
   },
@@ -184,13 +182,13 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
       return
     }
 
-    const next: Settings = { ...settings, autoStart }
-    set({ settings: next })
+    const previous = settings
+    set({ settings: { ...settings, autoStart } })
     try {
-      const saved = await backend.updateSettings(next)
+      const saved = await backend.updateAutoStart(autoStart)
       set({ settings: saved })
     } catch (error) {
-      set({ settings })
+      set({ settings: previous })
       useUiStore.getState().notify('error', `保存配置失败：${describeError(toAppError(error))}`)
     }
   },

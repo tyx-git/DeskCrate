@@ -59,7 +59,7 @@ export function Sidebar({
       openContextMenu({ x: event.clientX, y: event.clientY, target: location })
     },
 
-    toggleCollapse,
+    toggleCollapse: (id, collapsed) => void toggleCollapse(id, collapsed),
 
     addAppTo: (parent) =>
       openDialog({ kind: 'add-app', targetId: parent.id, targetName: parent.name }),

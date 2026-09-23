@@ -58,7 +58,11 @@ pub trait SettingsRepository: Send + Sync {
         mutate_snapshot(
             || self.load_settings(),
             |settings| self.save_settings(settings),
-            operation,
+            |settings| {
+                let result = operation(settings)?;
+                settings.revision = settings.revision.saturating_add(1);
+                Ok(result)
+            },
         )
     }
 }

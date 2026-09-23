@@ -66,21 +66,6 @@ fn insert_before_recursive(items: &mut Vec<Item>, before_id: &str, app: AppEXE) 
     false
 }
 
-// 追加到分类或分组的末尾。
-pub(crate) fn append_to_container(data: &mut AppData, parent_id: &str, app: AppEXE) -> bool {
-    if let Some(category) = find_category_mut(data, parent_id) {
-        category.groups.push(Item::App(app));
-        return true;
-    }
-
-    if let Some(group) = find_group_mut(data, parent_id) {
-        group.children.push(Item::App(app));
-        return true;
-    }
-
-    false
-}
-
 // 追加到顶层末尾：末行是应用行就并入，否则新起一行。
 pub(crate) fn append_to_root(data: &mut AppData, app: AppEXE) {
     match data.items.last_mut() {
@@ -264,17 +249,10 @@ pub(crate) fn for_each_in_items(items: &[Item], visit: &mut impl FnMut(&Item)) {
     }
 }
 
-/// 对整棵树的每个节点调用 `visit`（顶层应用不在这个范围里，它们是根节点上的行）。
-pub(crate) fn for_each_item(data: &AppData, visit: &mut impl FnMut(&Item)) {
-    for category in data.root_categories() {
-        for_each_in_items(&category.groups, visit);
-    }
-}
-
 /// 对**每一个**应用调用 `visit`，顶层应用和分类/分组里的都算。
 ///
-/// `for_each_item` 只看分类内部，顶层 `Apps` 行里的应用它看不见。凡是「要找遍所有
-/// 应用」的场景（比如同源复用）都得走这里，否则顶层应用会被整行漏掉。
+/// 凡是「要找遍所有应用」的场景（比如同源复用）都得走这里，
+/// 否则顶层应用会被整行漏掉。
 pub(crate) fn for_each_app(data: &AppData, visit: &mut impl FnMut(&AppEXE)) {
     for root in &data.items {
         match root {

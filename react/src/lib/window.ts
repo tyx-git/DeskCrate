@@ -1,6 +1,7 @@
 import { invoke } from '@tauri-apps/api/core'
 
 import { isTauriRuntime } from '../api/client'
+import { COMMANDS } from '../api/commands'
 
 /**
  * 主窗口控制。
@@ -56,7 +57,7 @@ export async function applyWindowGeometry(geometry: WindowGeometry): Promise<voi
 
   // 逐字段传而不是整个对象：Tauri 的 `invoke` 要求参数是
   // `Record<string, unknown>`，接口类型没有索引签名，整体传过不去。
-  await invoke<void>('resize_window', {
+  await invoke<void>(COMMANDS.resizeWindow, {
     x: geometry.x,
     y: geometry.y,
     width: geometry.width,
@@ -76,7 +77,7 @@ export async function finishWindowResize(): Promise<void> {
     return
   }
 
-  await invoke<void>('finish_window_resize')
+  await invoke<void>(COMMANDS.finishWindowResize)
 }
 
 /** 让窗口获得焦点（收起态展开后调用，避免输入焦点留在别处）。 */

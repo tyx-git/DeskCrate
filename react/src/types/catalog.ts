@@ -83,6 +83,19 @@ export interface AppData {
   items: RootItem[];
 }
 
+/** 批量导入中未能写入的一项。 */
+export interface BatchAddFailure {
+  sourcePath: string
+  code: string
+  message: string
+}
+
+/** 批量导入结果。 */
+export interface AddAppsResponse {
+  added: AppEXE[]
+  failed: BatchAddFailure[]
+}
+
 /** 判断节点是否为分组。 */
 export function isGroupItem(item: Item): item is { Group: Group } {
   return 'Group' in item;

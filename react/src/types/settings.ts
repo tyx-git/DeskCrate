@@ -54,6 +54,8 @@ export interface WindowSettings {
 }
 
 export interface Settings {
+  /** 配置修订号；兼容整体更新接口用于检测过期快照。 */
+  revision: number
   theme: Theme;
   window: WindowSettings;
   viewMode: ViewMode;

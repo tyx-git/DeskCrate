@@ -27,9 +27,9 @@ use crate::{
 // 一次抓取的预算。
 //
 // 首页 HTML 只要前面一截就够了（图标声明都在 `<head>` 里），256KB 足够；
-// 单个图标 1MB 已经远远超过任何 favicon 的合理大小。
+// 单个图标 512 KiB 已经足够保留高分辨率 favicon，同时限制异常响应体。
 const PAGE_MAX_BYTES: usize = 256 * 1024;
-const ICON_MAX_BYTES: usize = 1024 * 1024;
+const ICON_MAX_BYTES: usize = 512 * 1024;
 
 // 单次请求 5 秒，整次抓取 8 秒。
 //
@@ -45,8 +45,8 @@ const TOTAL_BUDGET_MS: u128 = 8000;
 // 「添加一个网址」拖成好几秒的等待。
 const MAX_CANDIDATES: usize = 3;
 
-// 图标缩放后的最长边。128 已经足够侧栏那个 44px 的格子在高 DPI 屏上清晰。
-const ICON_MAX_EDGE: u32 = 128;
+// 图标缩放后的最长边。256px 为高 DPI 侧栏保留足够的采样余量。
+const ICON_MAX_EDGE: u32 = 256;
 
 /// 一次抓取的最终产物。
 ///
@@ -967,12 +967,12 @@ mod tests {
             <link rel="icon" href="/big.png" sizes="180x180">
         "#;
 
-        // 大的在前；SVG 现在可直接由 WebView 渲染，所以与同尺寸位图同属可用候选。
+        // 256px 的 SVG 在前，随后是 180px 位图，再后是 16px ICO。
         assert_eq!(
             urls_of(&icon_candidates(html, "https://a.com")),
             vec![
-                "https://a.com/big.png",
                 "https://a.com/huge.svg",
+                "https://a.com/big.png",
                 "https://a.com/small.ico"
             ]
         );
@@ -980,13 +980,13 @@ mod tests {
 
     #[test]
     fn declared_edge_clamps_to_the_icon_limit() {
-        // 512 和 180 对最终 128 的图标没有区别，不该互相压过。
+        // 512 和 180 对最终 256 的图标没有区别，不该互相压过。
         assert_eq!(
             declared_edge("512x512"),
             ICON_MAX_EDGE,
             "超过上限的按上限计"
         );
-        assert_eq!(declared_edge("180x180"), ICON_MAX_EDGE);
+        assert_eq!(declared_edge("180x180"), 180);
         assert_eq!(declared_edge("64x64"), 64, "没到上限的按实际尺寸");
         assert_eq!(declared_edge("16x16 32x32"), 32, "多个尺寸取最大的那个");
         assert_eq!(declared_edge(""), ICON_MAX_EDGE, "没声明按够用计");
@@ -1013,6 +1013,6 @@ mod tests {
         let wide = RgbaImage::from_pixel(1024, 256, image::Rgba([1, 2, 3, 255]));
         let (width, height) = fit_within(wide).dimensions();
         assert_eq!(width, ICON_MAX_EDGE, "最长边应被压到上限");
-        assert_eq!(height, 32, "短边按比例缩放，不能变形");
+        assert_eq!(height, 64, "短边按比例缩放，不能变形");
     }
 }

@@ -4,7 +4,11 @@ use std::{
     ptr,
 };
 
-use image::{Rgba, RgbaImage};
+use image::{
+    codecs::png::{CompressionType, FilterType as PngFilterType, PngEncoder},
+    imageops::{self, FilterType},
+    ColorType, ImageEncoder, Rgba, RgbaImage,
+};
 use windows::{
     core::PCWSTR,
     Win32::{
@@ -16,12 +20,15 @@ use windows::{
             FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_FLAGS_AND_ATTRIBUTES,
         },
         UI::{
+            Controls::{IImageList, ILD_NORMAL},
             Shell::{
-                ExtractIconExW, SHGetFileInfoW, SHGetStockIconInfo, SHFILEINFOW, SHGFI_FLAGS,
-                SHGFI_ICON, SHGFI_LARGEICON, SHGFI_USEFILEATTRIBUTES, SHGSI_ICON, SHGSI_LARGEICON,
-                SHSTOCKICONINFO, SIID_DOCNOASSOC, SIID_FOLDER,
+                ExtractIconExW, SHGetFileInfoW, SHGetImageList, SHGetStockIconInfo, SHFILEINFOW,
+                SHGFI_FLAGS, SHGFI_ICON, SHGFI_SYSICONINDEX, SHGFI_USEFILEATTRIBUTES, SHGSI_ICON,
+                SHGSI_LARGEICON, SHIL_JUMBO, SHSTOCKICONINFO, SIID_DOCNOASSOC, SIID_FOLDER,
             },
-            WindowsAndMessaging::{DestroyIcon, DrawIconEx, DI_NORMAL, HICON},
+            WindowsAndMessaging::{
+                DestroyIcon, DrawIconEx, PrivateExtractIconsW, DI_NORMAL, HICON,
+            },
         },
     },
 };
@@ -29,7 +36,7 @@ use windows::{
 use crate::{
     error::AppResult,
     models::{AppError, IconExtractionResult},
-    system::wide,
+    system::{support, wide},
 };
 
 // 写入图标缓存的统一尺寸。
@@ -37,6 +44,14 @@ use crate::{
 // Windows 图标本身可能包含多个尺寸。先绘制到透明的 256×256 DIB，
 // 可以让前端后续按 CSS 尺寸缩放，同时避免把 Windows 句柄暴露给上层。
 const ICON_SIZE: u32 = 256;
+
+// 单个缓存图标的体积上限。256×256 的 RGBA 图标通常只有几 KB；
+// 512 KiB 足够保留高分辨率图标，同时避免异常资源无限占用磁盘。
+const ICON_MAX_FILE_BYTES: usize = 512 * 1024;
+
+// 极端图像经过高质量 PNG 编码仍超限时，至少保留这个尺寸，
+// 再失败才放弃保存，避免把图标压成不可用的小缩略图。
+const ICON_MIN_EDGE: u32 = 32;
 
 // 图标提取器。
 //
@@ -139,7 +154,8 @@ impl IconExtractor {
         std::fs::create_dir_all(&self.icons_dir)?;
 
         let cache_path = self.icon_path(app_id);
-        image.save(&cache_path).map_err(|error| {
+        let encoded = encode_icon_png(image)?;
+        std::fs::write(&cache_path, encoded).map_err(|error| {
             AppError::new(
                 "icon_save_failed",
                 format!("无法保存图标 {}: {error}", cache_path.display()),
@@ -167,6 +183,12 @@ impl IconExtractor {
     // 44px 的格子里比位图还清楚。所以 SVG 不解码，直接把字节按 `.svg` 落盘。
     pub(crate) fn save_svg(&self, app_id: &str, bytes: &[u8]) -> AppResult<IconExtractionResult> {
         validate_app_id(app_id)?;
+        if bytes.len() > ICON_MAX_FILE_BYTES {
+            return Err(AppError::new(
+                "icon_too_large",
+                format!("SVG 图标超过 {} KiB", ICON_MAX_FILE_BYTES / 1024),
+            ));
+        }
         std::fs::create_dir_all(&self.icons_dir)?;
 
         let cache_path = self.icon_path_with_extension(app_id, "svg");
@@ -238,7 +260,22 @@ impl IconExtractor {
 
 // 从文件的图标资源中提取一个 `HICON`。
 fn extract_icon_from_file(source_path: &Path, icon_index: i32) -> AppResult<OwnedIcon> {
-    let wide_path = to_wide(source_path)?;
+    let wide_path =
+        wide::nul_terminated(source_path.as_os_str(), "icon_invalid_path", "图标来源路径")?;
+
+    // `PrivateExtractIconsW` 可以按 256×256 请求资源中的最佳尺寸；
+    // 它比 `ExtractIconExW` 更适合高 DPI 图标。路径过长或 API 不支持当前资源时，
+    // 再回退到 Shell Jumbo 和旧 API。
+    if let Some(icon) = extract_private_icon(&wide_path, icon_index) {
+        return Ok(icon);
+    }
+
+    if let Some(icon) =
+        query_jumbo_shell_icon(&wide_path, FILE_FLAGS_AND_ATTRIBUTES(0), SHGFI_FLAGS(0))
+    {
+        return Ok(icon);
+    }
+
     let mut large_icon = HICON::default();
     let mut small_icon = HICON::default();
 
@@ -268,8 +305,18 @@ fn extract_icon_from_file(source_path: &Path, icon_index: i32) -> AppResult<Owne
 
 // 获取 Windows Shell 为指定路径选择的关联图标。
 fn extract_associated_icon(source_path: &Path) -> AppResult<OwnedIcon> {
-    let wide_path = to_wide(source_path)?;
-    let flags = SHGFI_ICON | SHGFI_LARGEICON;
+    let wide_path =
+        wide::nul_terminated(source_path.as_os_str(), "icon_invalid_path", "图标来源路径")?;
+
+    // Shell Jumbo 通常能返回 256×256 的缓存图标，是普通文件、文件夹和
+    // 拖拽来源最稳定的高分辨率路径。
+    if let Some(icon) =
+        query_jumbo_shell_icon(&wide_path, FILE_FLAGS_AND_ATTRIBUTES(0), SHGFI_FLAGS(0))
+    {
+        return Ok(icon);
+    }
+
+    let flags = SHGFI_ICON;
 
     // 先请求真实路径，以保留文件自身或目录的自定义图标。
     if let Some(icon) = query_shell_icon(&wide_path, FILE_FLAGS_AND_ATTRIBUTES(0), flags) {
@@ -283,6 +330,11 @@ fn extract_associated_icon(source_path: &Path) -> AppResult<OwnedIcon> {
     } else {
         FILE_ATTRIBUTE_NORMAL
     };
+
+    if let Some(icon) = query_jumbo_shell_icon(&wide_path, attributes, SHGFI_USEFILEATTRIBUTES) {
+        return Ok(icon);
+    }
+
     if let Some(icon) = query_shell_icon(&wide_path, attributes, flags | SHGFI_USEFILEATTRIBUTES) {
         return Ok(icon);
     }
@@ -295,6 +347,69 @@ fn extract_associated_icon(source_path: &Path) -> AppResult<OwnedIcon> {
             format!("无法获取路径关联图标: {} ({error})", source_path.display()),
         )
     })
+}
+
+// 按指定尺寸从图标资源中提取句柄。这个 API 的 Rust 绑定要求传入固定的
+// 260 个 UTF-16 单元，因此长路径由调用方回退到 Shell Jumbo / ExtractIconExW。
+fn extract_private_icon(path: &[u16], icon_index: i32) -> Option<OwnedIcon> {
+    if path.len() > 260 {
+        return None;
+    }
+
+    let mut fixed_path = [0u16; 260];
+    fixed_path[..path.len()].copy_from_slice(path);
+    let mut icons = [HICON::default(); 1];
+    let mut icon_id = 0u32;
+    let count = unsafe {
+        PrivateExtractIconsW(
+            &fixed_path,
+            icon_index,
+            ICON_SIZE as i32,
+            ICON_SIZE as i32,
+            Some(&mut icons),
+            Some(&mut icon_id as *mut u32),
+            0,
+        )
+    };
+
+    // 文档约定 UINT_MAX 表示调用失败；同时检查句柄，避免把无效句柄交给 GDI。
+    if count == 0 || count == u32::MAX || icons[0].is_invalid() {
+        destroy_icon_if_valid(icons[0]);
+        return None;
+    }
+
+    Some(OwnedIcon { handle: icons[0] })
+}
+
+// 从 Shell 的 Jumbo image list 取图标。`SHGetFileInfoW` 只负责把路径映射到
+// 系统图标索引，真正的高分辨率图像由 `SHIL_JUMBO` image list 提供。
+fn query_jumbo_shell_icon(
+    wide_path: &[u16],
+    attributes: FILE_FLAGS_AND_ATTRIBUTES,
+    extra_flags: SHGFI_FLAGS,
+) -> Option<OwnedIcon> {
+    let mut file_info = SHFILEINFOW::default();
+    let result = unsafe {
+        SHGetFileInfoW(
+            PCWSTR(wide_path.as_ptr()),
+            attributes,
+            Some(&mut file_info as *mut SHFILEINFOW),
+            std::mem::size_of::<SHFILEINFOW>() as u32,
+            SHGFI_SYSICONINDEX | extra_flags,
+        )
+    };
+    if result == 0 {
+        return None;
+    }
+
+    let image_list: IImageList = unsafe { SHGetImageList(SHIL_JUMBO as i32).ok()? };
+    let icon = unsafe { image_list.GetIcon(file_info.iIcon, ILD_NORMAL.0).ok()? };
+    if icon.is_invalid() {
+        destroy_icon_if_valid(icon);
+        return None;
+    }
+
+    Some(OwnedIcon { handle: icon })
 }
 
 fn query_shell_icon(
@@ -338,7 +453,7 @@ fn extract_stock_icon(is_directory: bool) -> AppResult<OwnedIcon> {
         unsafe { SHGetStockIconInfo(icon_id, SHGSI_ICON | SHGSI_LARGEICON, &mut stock_info) };
     if let Err(error) = result {
         destroy_icon_if_valid(stock_info.hIcon);
-        return Err(windows_error("stock_icon_failed", error));
+        return Err(support::windows_error("stock_icon_failed", error));
     }
 
     if stock_info.hIcon.is_invalid() {
@@ -399,7 +514,7 @@ fn render_icon(icon: &OwnedIcon) -> AppResult<(u32, u32, Vec<u8>)> {
             HBRUSH::default(),
             DI_NORMAL,
         )
-        .map_err(|error| windows_error("icon_draw_failed", error))?;
+        .map_err(|error| support::windows_error("icon_draw_failed", error))?;
     }
 
     let mut pixels = surface.pixels().to_vec();
@@ -410,6 +525,60 @@ fn render_icon(icon: &OwnedIcon) -> AppResult<(u32, u32, Vec<u8>)> {
     }
 
     Ok((ICON_SIZE, ICON_SIZE, pixels))
+}
+
+// 统一处理所有位图图标：本地图标和网站图标都限制最长边并限制最终 PNG
+// 体积。超限时逐级降采样，保持宽高比例和透明通道。
+fn encode_icon_png(mut image: RgbaImage) -> AppResult<Vec<u8>> {
+    image = fit_within(image);
+
+    loop {
+        let encoded = encode_png(&image)?;
+        if encoded.len() <= ICON_MAX_FILE_BYTES {
+            return Ok(encoded);
+        }
+
+        let longest = image.width().max(image.height());
+        if longest <= ICON_MIN_EDGE {
+            return Err(AppError::new(
+                "icon_too_large",
+                format!("PNG 图标超过 {} KiB", ICON_MAX_FILE_BYTES / 1024),
+            ));
+        }
+
+        let target_longest = ((longest as f64 * 0.75).round() as u32).max(ICON_MIN_EDGE);
+        let scale = f64::from(target_longest) / f64::from(longest);
+        let target_width = (f64::from(image.width()) * scale).round().max(1.0) as u32;
+        let target_height = (f64::from(image.height()) * scale).round().max(1.0) as u32;
+        image = imageops::resize(&image, target_width, target_height, FilterType::Lanczos3);
+    }
+}
+
+fn encode_png(image: &RgbaImage) -> AppResult<Vec<u8>> {
+    let mut encoded = Vec::new();
+    PngEncoder::new_with_quality(&mut encoded, CompressionType::Best, PngFilterType::Adaptive)
+        .write_image(
+            image.as_raw(),
+            image.width(),
+            image.height(),
+            ColorType::Rgba8.into(),
+        )
+        .map_err(|error| AppError::new("icon_encode_failed", error.to_string()))?;
+
+    Ok(encoded)
+}
+
+fn fit_within(image: RgbaImage) -> RgbaImage {
+    let (width, height) = image.dimensions();
+    let longest = width.max(height);
+    if longest <= ICON_SIZE {
+        return image;
+    }
+
+    let scale = f64::from(ICON_SIZE) / f64::from(longest);
+    let target_width = (f64::from(width) * scale).round().max(1.0) as u32;
+    let target_height = (f64::from(height) * scale).round().max(1.0) as u32;
+    imageops::resize(&image, target_width, target_height, FilterType::Lanczos3)
 }
 
 // 32 位、自上而下的内存 DIB。
@@ -463,7 +632,7 @@ impl DibSurface {
                 unsafe {
                     let _ = DeleteDC(dc);
                 }
-                return Err(windows_error("icon_dib_create_failed", error));
+                return Err(support::windows_error("icon_dib_create_failed", error));
             }
         };
 
@@ -538,11 +707,6 @@ fn destroy_icon_if_valid(icon: HICON) {
     }
 }
 
-// 将路径转换成以 NUL 结尾的 UTF-16 字符串。
-fn to_wide(path: &Path) -> AppResult<Vec<u16>> {
-    wide::nul_terminated(path.as_os_str(), "icon_invalid_path", "图标来源路径")
-}
-
 // 应用 ID 会参与构造文件名，只允许使用安全的文件名字符。
 fn validate_app_id(app_id: &str) -> AppResult<()> {
     if app_id.is_empty()
@@ -557,9 +721,4 @@ fn validate_app_id(app_id: &str) -> AppResult<()> {
     }
 
     Ok(())
-}
-
-// 将 Windows API 错误统一转换成项目错误模型。
-fn windows_error(code: &'static str, error: windows::core::Error) -> AppError {
-    AppError::new(code, format!("{error:?}"))
 }

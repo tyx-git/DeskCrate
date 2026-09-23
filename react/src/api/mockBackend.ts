@@ -1,9 +1,8 @@
-import { insertRootApp, rootApps, rootCategories } from '../lib/tree'
+import { findApp, findGroup, rootCategories } from '../lib/tree'
 import {
-  isAppsRoot,
-  isCategoryRoot,
   type AppData,
   type AppEXE,
+  type AddAppsResponse,
   type Category,
   type Group,
   type IconType,
@@ -12,6 +11,19 @@ import {
 } from '../types/catalog'
 import type { CssSize, Settings, ViewMode, WindowInitResponse, WindowSize } from '../types/settings'
 import type { Backend } from './backend'
+import {
+  appendCategory as appendCategoryData,
+  appendChild as appendChildData,
+  removeCategory as removeCategoryData,
+  insertApp as insertAppData,
+  moveApp as moveAppData,
+  removeApp as removeAppData,
+  removeGroup as removeGroupData,
+  renameApp as renameAppData,
+  renameCategory as renameCategoryData,
+  renameGroup as renameGroupData,
+  toggleCollapse as toggleCollapseData,
+} from '../lib/catalogMutations'
 
 /**
  * 浏览器预览用的内存后端。
@@ -21,6 +33,8 @@ import type { Backend } from './backend'
  * 生成、名称去空格后不能为空、分组嵌套不超过 4 层、删除返回 void。
  * 数据写入 localStorage，刷新页面不会丢。
  */
+// 目录树增删改和移动规则复用 `lib/catalogMutations.ts`；这里仅保留浏览器
+// 预览所需的示例数据、localStorage、延迟和图标占位行为。
 
 const STORAGE_KEY = 'deskcrate.mock.data'
 const SETTINGS_KEY = 'deskcrate.mock.settings'
@@ -134,11 +148,13 @@ function normalizeSettings(settings: Settings): Settings {
     ...settings,
     window: { ...defaultSettings().window, ...settings.window },
     autoStart: settings.autoStart ?? false,
+    revision: settings.revision ?? 0,
   }
 }
 
 function defaultSettings(): Settings {
   return {
+    revision: 0,
     theme: 'default',
     window: { isInitialized: false, position: null, size: null, sizeOverride: null },
     viewMode: 'expanded',
@@ -246,96 +262,9 @@ class MockBackend implements Backend {
     writeJson(SETTINGS_KEY, this.settings)
   }
 
-  /** 根节点上的所有分类（就地引用，可直接改）。 */
+  /** 根节点上的所有分类。 */
   private categories(): Category[] {
-    return this.data.items.flatMap((item) => (isCategoryRoot(item) ? [item.Category] : []))
-  }
-
-  /** 根节点上的所有顶层应用（就地引用）。 */
-  private topLevelApps(): AppEXE[] {
-    return this.data.items.flatMap((item) => (isAppsRoot(item) ? item.Apps : []))
-  }
-
-  /** 根节点上分类与分组的并集（就地引用）。 */
-  private containers(): Array<Category | Group> {
-    const list: Array<Category | Group> = []
-    for (const item of this.data.items) {
-      if (!isCategoryRoot(item)) continue
-      list.push(item.Category)
-      const collect = (groups: Item[]) => {
-        for (const entry of groups) {
-          if ('Group' in entry) {
-            list.push(entry.Group)
-            collect(entry.Group.children)
-          }
-        }
-      }
-      collect(item.Category.groups)
-    }
-    return list
-  }
-
-  /** 删除一个顶层应用，删空的那一行一并摘掉。 */
-  private removeTopLevelApp(id: string): void {
-    this.data.items = this.data.items
-      .map((item) =>
-        isAppsRoot(item)
-          ? { Apps: item.Apps.filter((app) => app.id !== id) }
-          : item,
-      )
-      .filter((item) => !isAppsRoot(item) || item.Apps.length > 0)
-  }
-
-  /** 在整棵树里就地替换某个节点，返回是否命中。 */
-  private replaceItem(
-    items: Item[],
-    id: string,
-    produce: (app: AppEXE) => AppEXE | null,
-  ): Item[] {
-    return items.flatMap((item): Item[] => {
-      if ('App' in item) {
-        if (item.App.id !== id) {
-          return [item]
-        }
-        const next = produce(item.App)
-        return next ? [{ App: next }] : []
-      }
-
-      return [
-        {
-          Group: {
-            ...item.Group,
-            children: this.replaceItem(item.Group.children, id, produce),
-          },
-        },
-      ]
-    })
-  }
-
-  private mapGroups(
-    items: Item[],
-    id: string,
-    produce: (group: Group) => Group | null,
-  ): Item[] {
-    return items.flatMap((item): Item[] => {
-      if ('App' in item) {
-        return [item]
-      }
-
-      if (item.Group.id === id) {
-        const next = produce(item.Group)
-        return next ? [{ Group: next }] : []
-      }
-
-      return [
-        {
-          Group: {
-            ...item.Group,
-            children: this.mapGroups(item.Group.children, id, produce),
-          },
-        },
-      ]
-    })
+    return rootCategories(this.data)
   }
 
   async getWindowInit(): Promise<WindowInitResponse> {
@@ -343,6 +272,7 @@ class MockBackend implements Backend {
     const position = this.settings.window.position ?? { x: 0, y: 0 }
     const size = this.settings.window.size ?? { width: 378, height: 572 }
     this.settings.window = { ...this.settings.window, isInitialized: true, position, size }
+    this.settings.revision += 1
     this.persistSettings()
     return { isInitialized: true, position, size }
   }
@@ -350,6 +280,7 @@ class MockBackend implements Backend {
   async applyViewMode(viewMode: ViewMode): Promise<WindowInitResponse> {
     await delay()
     this.settings.viewMode = viewMode
+    this.settings.revision += 1
     this.persistSettings()
     return {
       isInitialized: true,
@@ -365,7 +296,45 @@ class MockBackend implements Backend {
 
   async updateSettings(settings: Settings): Promise<Settings> {
     await delay()
-    this.settings = structuredClone(settings)
+    if (settings.revision !== this.settings.revision) {
+      throw {
+        code: 'settings_revision_conflict',
+        message: '配置已被更新，请刷新后重试',
+      }
+    }
+    this.settings = { ...structuredClone(settings), revision: settings.revision + 1 }
+    this.persistSettings()
+    return structuredClone(this.settings)
+  }
+
+  async updateAutoCollapse(enabled: boolean): Promise<Settings> {
+    await delay()
+    this.settings.autoCollapse = enabled
+    this.settings.revision += 1
+    this.persistSettings()
+    return structuredClone(this.settings)
+  }
+
+  async updateAutoStart(enabled: boolean): Promise<Settings> {
+    await delay()
+    this.settings.autoStart = enabled
+    this.settings.revision += 1
+    this.persistSettings()
+    return structuredClone(this.settings)
+  }
+
+  async updateTheme(theme: Settings['theme']): Promise<Settings> {
+    await delay()
+    this.settings.theme = theme
+    this.settings.revision += 1
+    this.persistSettings()
+    return structuredClone(this.settings)
+  }
+
+  async clearWindowSizeOverride(): Promise<Settings> {
+    await delay()
+    this.settings.window = { ...this.settings.window, sizeOverride: null }
+    this.settings.revision += 1
     this.persistSettings()
     return structuredClone(this.settings)
   }
@@ -384,7 +353,7 @@ class MockBackend implements Backend {
       groups: [],
       createdTime: new Date().toISOString(),
     }
-    this.data.items.push({ Category: category })
+    this.data = appendCategoryData(this.data, category)
     this.persistData()
     return structuredClone(category)
   }
@@ -395,18 +364,19 @@ class MockBackend implements Backend {
     if (!category) {
       throw { code: 'category_not_found', message: `找不到分类: ${id}` }
     }
-    category.name = normalizeName(name, '分类')
+    const renamed = normalizeName(name, '分类')
+    this.data = renameCategoryData(this.data, id, renamed)
+    const result = this.categories().find((item) => item.id === id)!
     this.persistData()
-    return structuredClone(category)
+    return structuredClone(result)
   }
 
   async deleteCategory(id: string): Promise<void> {
     await delay()
-    const index = this.data.items.findIndex((item) => isCategoryRoot(item) && item.Category.id === id)
-    if (index < 0) {
+    if (!this.categories().some((item) => item.id === id)) {
       throw { code: 'category_not_found', message: `找不到分类: ${id}` }
     }
-    this.data.items.splice(index, 1)
+    this.data = removeCategoryData(this.data, id)
     this.persistData()
   }
 
@@ -420,28 +390,12 @@ class MockBackend implements Backend {
       createdTime: new Date().toISOString(),
     }
 
-    const category = this.categories().find((item) => item.id === parentId)
-    if (category) {
-      category.groups.push({ Group: group })
-      this.persistData()
-      return structuredClone(group)
-    }
-
-    let attached = false
-    for (const category of this.categories()) {
-      category.groups = this.mapGroups(category.groups, parentId, (parent) => {
-        attached = true
-        return { ...parent, children: [...parent.children, { Group: group }] }
-      })
-      if (attached) {
-        break
-      }
-    }
-
-    if (!attached) {
+    const next = appendChildData(this.data, parentId, { Group: group })
+    if (next === this.data) {
       throw { code: 'parent_not_found', message: `找不到分组的父节点: ${parentId}` }
     }
 
+    this.data = next
     this.persistData()
     return structuredClone(group)
   }
@@ -449,38 +403,40 @@ class MockBackend implements Backend {
   async renameGroup(id: string, name: string): Promise<Group> {
     await delay()
     const renamed = normalizeName(name, '分组')
-    let result: Group | null = null
-
-    for (const category of this.categories()) {
-      category.groups = this.mapGroups(category.groups, id, (group) => {
-        result = { ...group, name: renamed }
-        return result
-      })
-    }
-
-    if (!result) {
+    const group = findGroup(this.data, id)
+    if (!group) {
       throw { code: 'group_not_found', message: `找不到分组: ${id}` }
     }
 
+    this.data = renameGroupData(this.data, id, renamed)
     this.persistData()
-    return structuredClone(result)
+    return structuredClone({ ...group, name: renamed })
   }
 
   async deleteGroup(id: string): Promise<void> {
     await delay()
-    let removed = false
-
-    for (const category of this.categories()) {
-      category.groups = this.mapGroups(category.groups, id, () => {
-        removed = true
-        return null
-      })
-    }
-
-    if (!removed) {
+    if (!findGroup(this.data, id)) {
       throw { code: 'group_not_found', message: `找不到分组: ${id}` }
     }
 
+    this.data = removeGroupData(this.data, id)
+    this.persistData()
+  }
+
+  async setNodeCollapsed(id: string, isCollapsed: boolean): Promise<void> {
+    await delay()
+    const category = this.categories().find((item) => item.id === id)
+    if (category) {
+      this.data = toggleCollapseData(this.data, id, isCollapsed)
+      this.persistData()
+      return
+    }
+
+    if (!findGroup(this.data, id)) {
+      throw { code: 'collapsible_node_not_found', message: `找不到可折叠节点: ${id}` }
+    }
+
+    this.data = toggleCollapseData(this.data, id, isCollapsed)
     this.persistData()
   }
 
@@ -505,108 +461,54 @@ class MockBackend implements Backend {
       createdTime: new Date().toISOString(),
     }
 
-    // 与后端一致：`null` 表示放到顶层，按 `rootIndex` 插到指定位置。
-    if (parentId === null) {
-      this.data.items = insertRootApp(this.data.items, app, rootIndex ?? Number.MAX_SAFE_INTEGER)
-      this.persistData()
-      return structuredClone(app)
-    }
-
-    const category = this.categories().find((item) => item.id === parentId)
-    if (category) {
-      category.groups.push({ App: app })
-      this.persistData()
-      return structuredClone(app)
-    }
-
-    let attached = false
-    for (const category of this.categories()) {
-      category.groups = this.mapGroups(category.groups, parentId, (group) => {
-        attached = true
-        return { ...group, children: [...group.children, { App: app }] }
-      })
-      if (attached) {
-        break
-      }
-    }
-
-    if (!attached) {
+    const next = insertAppData(this.data, app, parentId, rootIndex)
+    if (next === this.data) {
       throw { code: 'parent_not_found', message: `找不到父节点: ${parentId}` }
     }
 
+    this.data = next
     this.persistData()
     return structuredClone(app)
   }
 
+  async addApps(
+    parentId: string | null,
+    sourcePaths: string[],
+    rootIndex?: number,
+  ): Promise<AddAppsResponse> {
+    await delay()
+    const added: AppEXE[] = []
+    const failed: AddAppsResponse['failed'] = []
+
+    for (const sourcePath of sourcePaths) {
+      try {
+        const app = await this.addApp(parentId, sourcePath, undefined, rootIndex)
+        added.push(app)
+      } catch (error) {
+        const value = error as { code?: string; message?: string }
+        failed.push({
+          sourcePath,
+          code: value.code ?? 'mock_import_failed',
+          message: value.message ?? '批量导入失败',
+        })
+      }
+    }
+
+    return { added: structuredClone(added), failed }
+  }
+
   async moveApp(id: string, parentId: string | null, beforeId: string | null): Promise<void> {
     await delay()
-
-    // 与后端一致：先从原位置摘下来，再按参照节点插回去。
-    let moved: AppEXE | null = null
-
-    for (const item of this.data.items) {
-      if (!isAppsRoot(item)) continue
-      const found = item.Apps.find((app) => app.id === id)
-      if (!found) continue
-      moved = found
-      item.Apps = item.Apps.filter((app) => app.id !== id)
-      break
-    }
-
-    if (!moved) {
-      for (const category of this.categories()) {
-        const result = removeAppFromItems(category.groups, id)
-        category.groups = result.items
-        if (result.app) {
-          moved = result.app
-          break
-        }
+    const result = moveAppData(this.data, id, parentId, beforeId)
+    if (!result.ok) {
+      const messages = {
+        app_not_found: `找不到应用: ${id}`,
+        parent_not_found: `找不到目标容器: ${parentId}`,
+        reference_not_found: `找不到参照节点: ${beforeId}`,
       }
+      throw { code: result.code, message: messages[result.code] }
     }
-
-    // 顶层行被掏空就摘掉，不能留下一条没有内容的分界。
-    this.data.items = this.data.items.filter((item) => !isAppsRoot(item) || item.Apps.length > 0)
-
-    if (!moved) {
-      throw { code: 'app_not_found', message: `找不到应用: ${id}` }
-    }
-    const app: AppEXE = moved
-
-    if (parentId === null) {
-      if (beforeId === null) {
-        const last = this.data.items[this.data.items.length - 1]
-        if (last && isAppsRoot(last)) last.Apps.push(app)
-        else this.data.items.push({ Apps: [app] })
-      } else {
-        const placed = this.data.items.some((item) => {
-          if (!isAppsRoot(item)) return false
-          const at = item.Apps.findIndex((one) => one.id === beforeId)
-          if (at < 0) return false
-          item.Apps = [...item.Apps.slice(0, at), app, ...item.Apps.slice(at)]
-          return true
-        })
-        if (!placed) {
-          throw { code: 'reference_not_found', message: `找不到参照节点: ${beforeId}` }
-        }
-      }
-    } else {
-      const container = this.containers().find((item) => item.id === parentId)
-      if (!container) {
-        throw { code: 'parent_not_found', message: `找不到目标容器: ${parentId}` }
-      }
-      const entries = 'groups' in container ? container.groups : container.children
-      const at =
-        beforeId === null
-          ? -1
-          : entries.findIndex((entry) =>
-              'App' in entry ? entry.App.id === beforeId : entry.Group.id === beforeId,
-            )
-      const next = [...entries]
-      next.splice(at < 0 ? next.length : at, 0, { App: app })
-      if ('groups' in container) container.groups = next
-      else container.children = next
-    }
-
+    this.data = result.data
     this.persistData()
   }
 
@@ -618,118 +520,34 @@ class MockBackend implements Backend {
   async renameApp(id: string, name: string): Promise<AppEXE> {
     await delay()
     const renamed = normalizeName(name, '应用')
-    let result: AppEXE | null = null
-
-    const root = this.topLevelApps().find((app) => app.id === id)
-    if (root) {
-      root.name = renamed
-      result = root
-    }
-
-    for (const category of this.categories()) {
-      category.groups = this.replaceItem(category.groups, id, (app) => {
-        result = { ...app, name: renamed }
-        return result
-      })
-    }
-
-    if (!result) {
+    const existing = findApp(this.data, id)
+    if (!existing) {
       throw { code: 'app_not_found', message: `找不到应用: ${id}` }
     }
 
+    this.data = renameAppData(this.data, id, renamed)
     this.persistData()
-    return structuredClone(result)
+    return structuredClone({ ...existing, name: renamed })
   }
 
   async deleteApp(id: string): Promise<void> {
     await delay()
-    let removed = false
-
-    const index = this.topLevelApps().findIndex((app) => app.id === id)
-    if (index >= 0) {
-      this.removeTopLevelApp(id)
-      removed = true
-    }
-
-    for (const category of this.categories()) {
-      category.groups = this.replaceItem(category.groups, id, () => {
-        removed = true
-        return null
-      })
-    }
-
-    if (!removed) {
+    if (!findApp(this.data, id)) {
       throw { code: 'app_not_found', message: `找不到应用: ${id}` }
     }
 
+    this.data = removeAppData(this.data, id)
     this.persistData()
   }
 
   async launchIcon(id: string): Promise<void> {
     await delay()
-    if (!findAppInTree(this.data, id)) {
+    if (!findApp(this.data, id)) {
       throw { code: 'app_not_found', message: `找不到应用: ${id}` }
     }
     // 浏览器里无法真的启动程序，留一条日志方便确认调用链通了。
     console.info('[mock] launch_icon', id)
   }
-}
-
-/** 从一层节点里摘掉一个应用，返回摘下的应用与剩下的节点。 */
-function removeAppFromItems(
-  items: Item[],
-  id: string,
-): { app: AppEXE | null; items: Item[] } {
-  let taken: AppEXE | null = null
-
-  const walk = (entries: Item[]): Item[] =>
-    entries
-      .map((entry): Item | null => {
-        if ('App' in entry) {
-          if (entry.App.id === id) {
-            taken = entry.App
-            return null
-          }
-          return entry
-        }
-        return { Group: { ...entry.Group, children: walk(entry.Group.children) } }
-      })
-      .filter((entry): entry is Item => entry !== null)
-
-  const next = walk(items)
-  return { app: taken, items: next }
-}
-
-function findAppInTree(data: AppData, id: string): AppEXE | null {
-  const root = rootApps(data).find((app) => app.id === id)
-  if (root) {
-    return root
-  }
-
-  const walk = (items: readonly Item[]): AppEXE | null => {
-    for (const item of items) {
-      if ('App' in item) {
-        if (item.App.id === id) {
-          return item.App
-        }
-        continue
-      }
-      const found = walk(item.Group.children)
-      if (found) {
-        return found
-      }
-    }
-    return null
-  }
-
-  for (const category of rootCategories(data)) {
-    const found = walk(category.groups)
-    if (found) {
-      return found
-    }
-  }
-
-  return null
 }
 
 function deriveName(path: string): string {

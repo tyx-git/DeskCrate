@@ -7,6 +7,7 @@ use serde_json::json;
 fn settings_default_matches_the_first_launch_policy() {
     let settings = Settings::default();
 
+    assert_eq!(settings.revision, 0);
     assert_eq!(settings.theme, Theme::Default);
     assert_eq!(settings.view_mode, ViewMode::Expanded);
     assert!(!settings.auto_collapse);
@@ -41,6 +42,7 @@ fn settings_serialize_using_camel_case_and_lowercase_enum_values() {
     let json = serde_json::to_value(settings).expect("settings should serialize");
 
     assert_eq!(json["theme"], "default");
+    assert_eq!(json["revision"], 0);
     assert_eq!(json["viewMode"], "collapsed");
     assert_eq!(json["autoCollapse"], true);
     assert_eq!(json["window"]["isInitialized"], true);

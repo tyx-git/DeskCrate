@@ -30,7 +30,7 @@ export function SidebarShell() {
   const stageConverged = useSettingsStore((state) => state.stageConverged)
   const collapsed = viewMode === 'collapsed'
 
-  const addApp = useCatalogStore((state) => state.addApp)
+  const addApps = useCatalogStore((state) => state.addApps)
   const notify = useUiStore((state) => state.notify)
   const openContextMenu = useUiStore((state) => state.openContextMenu)
 
@@ -49,19 +49,16 @@ export function SidebarShell() {
       const rootIndex = target.index
 
       void (async () => {
-        let added = 0
-        for (const path of paths) {
-          const created = await addApp(parentId, path, undefined, rootIndex ?? undefined)
-          if (created) {
-            added += 1
-          }
-        }
-        if (added > 0) {
-          notify('info', `已添加 ${added} 个条目`)
+        const result = await addApps(parentId, paths, rootIndex ?? undefined)
+        if (result.added.length > 0) {
+          const failed = result.failed.length > 0 ? `，${result.failed.length} 个失败` : ''
+          notify('info', `已添加 ${result.added.length} 个条目${failed}`)
+        } else if (result.failed.length > 0) {
+          notify('error', `批量导入失败：${result.failed.length} 个条目未添加`)
         }
       })()
     },
-    [addApp, notify],
+    [addApps, notify],
   )
 
   const { isDragging, activeDropId, activeDropIndex } = useFileDrop(handleDropPaths)

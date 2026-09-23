@@ -8,4 +8,5 @@ pub(crate) mod icon_extract;
 // 既有的引用与文档。
 pub(crate) mod registory;
 pub(crate) mod shortcut;
+pub(crate) mod support;
 pub(crate) mod wide;

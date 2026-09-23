@@ -7,8 +7,9 @@ use uuid::Uuid;
 use crate::{
     error::AppResult,
     models::{
-        AddAppRequest, AddCategoryRequest, AddGroupRequest, AppData, AppEXE, AppError, Category,
-        DeleteRequest, Group, IconType, Item, MoveAppRequest, RenameRequest, RootItem,
+        AddAppRequest, AddAppsRequest, AddAppsResponse, AddCategoryRequest, AddGroupRequest,
+        AppData, AppEXE, AppError, BatchAddFailure, Category, DeleteRequest, Group, IconType, Item,
+        MoveAppRequest, RenameRequest, RootItem, SetNodeCollapsedRequest,
     },
     path,
     state::AppState,
@@ -82,7 +83,7 @@ pub fn delete_category(state: &AppState, request: DeleteRequest) -> AppResult<()
         })?;
         (removed, store.icons_path().to_path_buf())
     };
-    cleanup_category_icons(&removed, &icons_dir);
+    cleanup_icons(&removed.groups, &icons_dir);
     Ok(())
 }
 
@@ -148,6 +149,33 @@ pub fn delete_group(state: &AppState, request: DeleteRequest) -> AppResult<()> {
         "group_not_found",
         "分组",
     )
+}
+
+// 原子更新分类或分组的折叠状态，并持久化到 data.json。
+//
+// 应用节点没有折叠状态，因此只允许分类和分组 ID；读取、修改和写回由
+// DataRepository 的同一事务完成，多个窗口或进程同时更新时不会丢失。
+pub fn set_node_collapsed(state: &AppState, request: SetNodeCollapsedRequest) -> AppResult<()> {
+    validate_id(&request.id)?;
+
+    let store = state.get_lock()?;
+    store.mutate_data(|data| {
+        if let Some(category) = tree::find_category_mut(data, &request.id) {
+            category.is_collapsed = request.is_collapsed;
+            return Ok(());
+        }
+
+        if let Some(group) = tree::find_group_mut(data, &request.id) {
+            group.is_collapsed = request.is_collapsed;
+            return Ok(());
+        }
+
+        Err(not_found(
+            "collapsible_node_not_found",
+            "可折叠节点",
+            &request.id,
+        ))
+    })
 }
 
 // 新增应用或快捷方式。
@@ -244,6 +272,121 @@ pub fn add_app(state: &AppState, request: AddAppRequest) -> AppResult<AppEXE> {
     }
 
     Ok(app)
+}
+
+// 批量新增应用：耗时准备在锁外完成，成功结果一次性提交到 data.json。
+//
+// 单项来源、快捷方式或图标失败只进入 `failed`，不会阻塞其他项；网址仍使用
+// 内置占位图，后续由既有后台补图标流程处理。这样 N 个来源只触发一次 JSON
+// 读改写和原子替换，同时不会把图标提取过程放进存储锁。
+pub fn add_apps(state: &AppState, request: AddAppsRequest) -> AppResult<AddAppsResponse> {
+    if let Some(parent_id) = &request.parent_id {
+        validate_id(parent_id)?;
+    }
+    if request.source_paths.is_empty() {
+        return Err(AppError::new("empty_batch", "批量导入来源不能为空"));
+    }
+
+    let (icon_service, data_snapshot) = {
+        let store = state.get_lock()?;
+        (IconService::from_store(&store), store.load_data()?)
+    };
+
+    if let Some(parent_id) = &request.parent_id {
+        if !tree::parent_exists(&data_snapshot, parent_id) {
+            return Err(not_found("parent_not_found", "应用的父节点", parent_id));
+        }
+    }
+
+    let mut added = Vec::new();
+    let mut failed = Vec::new();
+    let mut cache_paths = Vec::new();
+
+    for source_path in request.source_paths {
+        let original = source_path.clone();
+        let result = prepare_batch_app(source_path, &icon_service);
+        match result {
+            Ok((app, cache_path)) => {
+                cache_paths.extend(cache_path);
+                added.push(app);
+            }
+            Err(error) => failed.push(BatchAddFailure {
+                source_path: original,
+                code: error.code,
+                message: error.message,
+            }),
+        }
+    }
+
+    if added.is_empty() {
+        for path in cache_paths {
+            remove_cached_icon(Some(&path));
+        }
+        return Ok(AddAppsResponse { added, failed });
+    }
+
+    let store = match state.get_lock() {
+        Ok(store) => store,
+        Err(error) => {
+            for path in cache_paths {
+                remove_cached_icon(Some(&path));
+            }
+            return Err(error);
+        }
+    };
+    if let Err(error) = store.mutate_data(|data| {
+        for app in &added {
+            match &request.parent_id {
+                Some(parent_id) => {
+                    append_item(data, parent_id, Item::App(app.clone()), "应用的父节点")?;
+                }
+                None => tree::insert_root_app(
+                    data,
+                    app.clone(),
+                    request.root_index.unwrap_or(usize::MAX),
+                ),
+            }
+        }
+        Ok(())
+    }) {
+        for path in cache_paths {
+            remove_cached_icon(Some(&path));
+        }
+        return Err(error);
+    }
+
+    Ok(AddAppsResponse { added, failed })
+}
+
+fn prepare_batch_app(
+    source_path: String,
+    icon_service: &IconService,
+) -> AppResult<(AppEXE, Option<PathBuf>)> {
+    let request = AddAppRequest {
+        parent_id: None,
+        source_path,
+        name: None,
+        root_index: None,
+    };
+    let source = normalize_source(request.source_path)?;
+    if let Source::LocalPath(path) = &source {
+        validate_local_source(path)?;
+    }
+
+    let app_id = Uuid::new_v4().to_string();
+    let prepared = prepare_app(&source, None, &app_id, icon_service, None)?;
+    let cache_path = prepared.cache_path.clone();
+    let app = AppEXE {
+        id: app_id,
+        name: prepared.name,
+        source_path: source.into_string(),
+        arguments: prepared.arguments,
+        working_dir: prepared.working_dir,
+        icon_url: prepared.icon_url,
+        icon_type: prepared.icon_type,
+        created_time: Utc::now().to_rfc3339(),
+    };
+    Ok((app, cache_path))
 }
 
 // 补抓一个网址应用的图标，拿到就回填进 `data.json`。
@@ -407,7 +550,7 @@ pub fn move_app(state: &AppState, request: MoveAppRequest) -> AppResult<()> {
                     }
                 }
                 None => {
-                    if tree::append_to_container(data, parent_id, app) {
+                    if tree::append_child(data, parent_id, Item::App(app)) {
                         Ok(())
                     } else {
                         Err(not_found("parent_not_found", "目标容器", parent_id))
@@ -476,9 +619,7 @@ fn delete_item(
     };
 
     // 被摘掉的节点可能是一个分组（里面还挂着后代应用），所以要递归清理。
-    tree::for_each_in_items(std::slice::from_ref(&removed), &mut |item| {
-        remove_app_icon(item, &icons_dir)
-    });
+    cleanup_icons(std::slice::from_ref(&removed), &icons_dir);
     Ok(())
 }
 
@@ -591,10 +732,11 @@ fn normalize_name(
 }
 
 fn choose_app_name(requested_name: Option<&str>, fallback: &str) -> AppResult<String> {
-    match requested_name {
-        Some(name) => normalize_name(name, "invalid_app_name", "应用"),
-        None => normalize_name(fallback, "invalid_app_name", "应用"),
-    }
+    normalize_name(
+        requested_name.unwrap_or(fallback),
+        "invalid_app_name",
+        "应用",
+    )
 }
 
 fn validate_id(id: &str) -> AppResult<()> {
@@ -703,11 +845,9 @@ fn remove_cached_icon(path: Option<&Path>) {
 //
 // 两个扩展名都要清：本地应用的图标是位图（`.png`），网址应用解不出位图时会把
 // SVG 原文按 `.svg` 落盘。只删一个会留下另一种孤儿。
-fn cleanup_category_icons(category: &Category, icons_dir: &Path) {
+fn cleanup_icons(items: &[Item], icons_dir: &Path) {
     // 复用树模块那份遍历，嵌套分组交给它去钻。
-    tree::for_each_in_items(&category.groups, &mut |item| {
-        remove_app_icon(item, icons_dir)
-    });
+    tree::for_each_in_items(items, &mut |item| remove_app_icon(item, icons_dir));
 }
 
 // 应用可能占用的图标缓存路径。png 和 svg 是互斥的（同一时刻只有一个），
@@ -807,11 +947,9 @@ pub fn sweep_orphan_icons(state: &AppState) -> AppResult<Vec<String>> {
 //
 // 顶层应用也要算进去：漏了它们，孤儿对账会把这些图标当成没人引用的垃圾删掉。
 fn collect_app_ids(data: &AppData) -> HashSet<String> {
-    let mut ids: HashSet<String> = data.root_apps().map(|app| app.id.clone()).collect();
-    tree::for_each_item(data, &mut |item| {
-        if let Item::App(app) = item {
-            ids.insert(app.id.clone());
-        }
+    let mut ids = HashSet::new();
+    tree::for_each_app(data, &mut |app| {
+        ids.insert(app.id.clone());
     });
     ids
 }

@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    fmt::Display,
+    time::{Duration, Instant},
+};
 
 use crate::{
     error::AppResult,
@@ -212,12 +215,12 @@ pub fn persist_window_state(
     // 用户最后一次拖拽可能正好落在节流窗口里，退出是补写它的最后机会。
     flush_user_resize(state)?;
 
-    let position = window.inner_position().map_err(|error| {
-        crate::models::AppError::new("window_position_read_failed", error.to_string())
-    })?;
-    let size = window.inner_size().map_err(|error| {
-        crate::models::AppError::new("window_size_read_failed", error.to_string())
-    })?;
+    let position = window
+        .inner_position()
+        .map_err(|error| window_error("window_position_read_failed", error))?;
+    let size = window
+        .inner_size()
+        .map_err(|error| window_error("window_size_read_failed", error))?;
 
     let position = WindowPosition {
         x: position.x,
@@ -282,14 +285,10 @@ pub fn resize_window<R: tauri::Runtime>(
 
     window
         .set_size(tauri::PhysicalSize::new(size.width, size.height))
-        .map_err(|error| {
-            crate::models::AppError::new("window_size_apply_failed", error.to_string())
-        })?;
+        .map_err(|error| window_error("window_size_apply_failed", error))?;
     window
         .set_position(tauri::PhysicalPosition::new(position.x, position.y))
-        .map_err(|error| {
-            crate::models::AppError::new("window_position_apply_failed", error.to_string())
-        })?;
+        .map_err(|error| window_error("window_position_apply_failed", error))?;
 
     Ok(())
 }
@@ -546,7 +545,7 @@ fn current_geometry<R: tauri::Runtime>(
 ) -> AppResult<(WindowPosition, WindowSize)> {
     let monitor = window
         .current_monitor()
-        .map_err(|error| crate::models::AppError::new("monitor_read_failed", error.to_string()))?
+        .map_err(|error| window_error("monitor_read_failed", error))?
         .or_else(|| window.primary_monitor().ok().flatten())
         .ok_or_else(|| invalid_window_state("无法获取当前显示器信息"))?;
 
@@ -756,14 +755,10 @@ fn apply_geometry<R: tauri::Runtime>(
 
     window
         .set_size(tauri::PhysicalSize::new(size.width, size.height))
-        .map_err(|error| {
-            crate::models::AppError::new("window_size_apply_failed", error.to_string())
-        })?;
+        .map_err(|error| window_error("window_size_apply_failed", error))?;
     window
         .set_position(tauri::PhysicalPosition::new(position.x, position.y))
-        .map_err(|error| {
-            crate::models::AppError::new("window_position_apply_failed", error.to_string())
-        })?;
+        .map_err(|error| window_error("window_position_apply_failed", error))?;
     Ok(())
 }
 
@@ -787,8 +782,12 @@ fn validate_window_size(size: WindowSize) -> AppResult<()> {
     Ok(())
 }
 
+fn window_error(code: &'static str, error: impl Display) -> crate::models::AppError {
+    crate::models::AppError::new(code, error.to_string())
+}
+
 fn invalid_window_state(message: impl Into<String>) -> crate::models::AppError {
-    crate::models::AppError::new("invalid_window_state", message)
+    window_error("invalid_window_state", message.into())
 }
 
 // 保留既有服务层入口；实际状态机逻辑集中在 `initialize_window`。

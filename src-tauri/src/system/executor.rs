@@ -5,7 +5,7 @@ use windows::{
     Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL},
 };
 
-use crate::{error::AppResult, models::AppError, path, system::wide};
+use crate::{error::AppResult, models::AppError, path, system::wide, text};
 
 // 统一启动一个用户保存的目标。
 //
@@ -51,7 +51,7 @@ fn spawn_program(
     // 当前参数被定义为一个完整的 Windows 原始命令行字符串。
     // `raw_arg` 不会重新拆分或转义字符串，可以保留 Windows 参数中
     // 的引号、反斜杠和带空格的值。
-    if let Some(raw_arguments) = non_empty_text(arguments) {
+    if let Some(raw_arguments) = text::optional_trimmed(arguments) {
         if raw_arguments.contains('\0') {
             return Err(AppError::new(
                 "exec_invalid_arguments",
@@ -82,7 +82,7 @@ fn shell_open(
 ) -> AppResult<()> {
     let operation = to_wide_string("open", "exec_invalid_operation")?;
     let target = to_wide_path(target_path)?;
-    let parameters = non_empty_text(arguments)
+    let parameters = text::optional_trimmed(arguments)
         .map(|value| to_wide_string(value, "exec_invalid_arguments"))
         .transpose()?;
     let directory = non_empty_path(working_dir).map(to_wide_path).transpose()?;
@@ -152,21 +152,12 @@ fn non_empty_path(path: Option<&Path>) -> Option<&Path> {
     path.filter(|path| !path.as_os_str().is_empty())
 }
 
-fn non_empty_text(value: Option<&str>) -> Option<&str> {
-    value.filter(|value| !value.trim().is_empty())
-}
-
 // 将 Windows 字符串转换成以 NUL 结尾的 UTF-16 字符串。
-fn to_wide(value: &std::ffi::OsStr, error_code: &'static str, kind: &str) -> AppResult<Vec<u16>> {
-    wide::nul_terminated(value, error_code, kind)
-}
-
-// 将 Rust 字符串转换成以 NUL 结尾的 UTF-16 字符串。
 fn to_wide_string(value: &str, error_code: &'static str) -> AppResult<Vec<u16>> {
-    to_wide(std::ffi::OsStr::new(value), error_code, "字符串")
+    wide::nul_terminated(std::ffi::OsStr::new(value), error_code, "字符串")
 }
 
 // 将 Windows 路径转换成以 NUL 结尾的 UTF-16 字符串。
 fn to_wide_path(path: &Path) -> AppResult<Vec<u16>> {
-    to_wide(path.as_os_str(), "exec_invalid_path", "路径")
+    wide::nul_terminated(path.as_os_str(), "exec_invalid_path", "路径")
 }

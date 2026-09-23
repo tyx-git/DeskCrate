@@ -5,10 +5,12 @@
  * 是设计稿 CSS 像素 —— 前端的鼠标坐标和 `innerWidth/innerHeight` 本来就在这个
  * 单位里，先夹再交给后端换算，两边才不会因为一个缩放比而错开。
  */
-export const OVERLAY_WIDTH_MIN = 220
-export const OVERLAY_WIDTH_MAX = 480
-export const OVERLAY_HEIGHT_MIN = 320
-export const OVERLAY_HEIGHT_MAX = 900
+import { WINDOW_SPEC } from '../spec/windowSpec'
+
+export const OVERLAY_WIDTH_MIN = WINDOW_SPEC.overlayWidthMinPx
+export const OVERLAY_WIDTH_MAX = WINDOW_SPEC.overlayWidthMaxPx
+export const OVERLAY_HEIGHT_MIN = WINDOW_SPEC.overlayHeightMinPx
+export const OVERLAY_HEIGHT_MAX = WINDOW_SPEC.overlayHeightMaxPx
 
 /** 把尺寸夹进设计稿允许的范围。 */
 export function clampOverlaySize(width: number, height: number): {

@@ -8,6 +8,7 @@ pub mod services;
 pub mod state;
 pub mod storage;
 pub(crate) mod system;
+pub(crate) mod text;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -103,11 +104,17 @@ pub fn run() {
             commands::catalog::add_group,
             commands::catalog::rename_group,
             commands::catalog::delete_group,
+            commands::catalog::set_node_collapsed,
             commands::catalog::add_app,
+            commands::catalog::add_apps,
             commands::catalog::move_app,
             commands::catalog::rename_app,
             commands::catalog::delete_app,
             commands::settings::get_settings,
+            commands::settings::update_auto_collapse,
+            commands::settings::update_auto_start,
+            commands::settings::update_theme,
+            commands::settings::clear_window_size_override,
             commands::settings::update_settings,
             commands::window::is_init,
             commands::window::apply_view_mode,

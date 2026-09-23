@@ -10,46 +10,9 @@ use serde::{Deserialize, Serialize};
 //
 // 这些常量不会被序列化到 `config.json`；用户可修改的配置才放入 `Settings`。
 pub mod css {
-    pub const SIDEBAR_LEFT_PX: u32 = 2; //展开侧栏距离左侧的距离。
-    pub const SIDEBAR_TOP_PERCENT: f32 = 12.5; //展开侧栏距离顶部的百分比。
-    pub const SIDEBAR_WIDTH_PERCENT: f32 = 18.75; //展开侧栏占宽度的百分比。
-    pub const SIDEBAR_HEIGHT_PERCENT: f32 = 50.0; //展开侧栏占高度的百分比。
-    pub const SIDEBAR_VERTICAL_PADDING_PX: u32 = 10; //展开侧栏上下内边距。
-    pub const SIDEBAR_BORDER_RADIUS_PX: u32 = 10; //展开侧栏圆角半径。
-    pub const SIDEBAR_SCROLLBAR_WIDTH_PX: u32 = 4; //展开侧栏滚动条宽度。
-    pub const SIDEBAR_BACKDROP_BLUR_PX: u32 = 28; //展开侧栏背景模糊半径。
-
-    pub const COLLAPSED_STRIP_TOP_PERCENT: f32 = 12.5; //收起指示条距离场景顶部的百分比。
-    pub const COLLAPSED_STRIP_WIDTH_PX: u32 = 3; //收起指示条宽度。
-    pub const COLLAPSED_STRIP_HEIGHT_PX: u32 = 80; //收起指示条高度。
-
-    pub const SEARCH_MARGIN_TOP_PERCENT: f32 = 2.0; //搜索框上外边距百分比。
-    pub const SEARCH_MARGIN_HORIZONTAL_PERCENT: f32 = 4.0; //搜索框左右外边距百分比。
-    pub const SEARCH_MARGIN_BOTTOM_PERCENT: f32 = 1.5; //搜索框下外边距百分比。
-    pub const DIVIDER_HEIGHT_PX: u32 = 1; //分隔线高度。
-
-    pub const ICON_GRID_GAP_MIN_PX: u32 = 4; //图标网格间距的最小值。
-    pub const ICON_GRID_GAP_VIEWPORT_PERCENT: f32 = 0.8; //图标网格间距的视口宽度比例。
-    pub const ICON_GRID_GAP_MAX_PX: u32 = 12; //图标网格间距的最大值。
-    pub const ICON_ITEM_WIDTH_MIN_PX: u32 = 36; //单个图标项宽度的最小值。
-    pub const ICON_ITEM_WIDTH_VIEWPORT_PERCENT: f32 = 4.0; //单个图标项宽度的视口宽度比例。
-    pub const ICON_ITEM_WIDTH_MAX_PX: u32 = 64; //单个图标项宽度的最大值。
-    pub const ICON_EMOJI_SIZE_MIN_PX: u32 = 24; //图标容器尺寸的最小值。
-    pub const ICON_EMOJI_SIZE_VIEWPORT_PERCENT: f32 = 3.0; //图标容器尺寸的视口宽度比例。
-    pub const ICON_EMOJI_SIZE_MAX_PX: u32 = 44; //图标容器尺寸的最大值。
-
-    // 以下常量描述主窗口自身的形状。侧栏是一个浮在桌面上的玻璃面板，
-    // 窗口尺寸并不等于侧栏尺寸：窗口需要在侧栏包围盒之外留出一圈透明
-    // 留白，CSS 的 box-shadow 才不会被窗口边界裁掉。
-    pub const OVERLAY_SHADOW_GUTTER_PX: u32 = 16; //窗口在侧栏右侧和上下两侧多留的透明像素。
-    pub const COLLAPSED_STRIP_LEFT_PX: u32 = 0; //收起指示条距离场景左侧的距离。
-
-    // 悬浮窗的尺寸夹取范围。工作区极小时保证侧栏仍然可用，工作区极大时
-    // 避免侧栏铺满半个屏幕。
-    pub const OVERLAY_WIDTH_MIN_PX: u32 = 220; //展开态窗口宽度下限。
-    pub const OVERLAY_WIDTH_MAX_PX: u32 = 480; //展开态窗口宽度上限。
-    pub const OVERLAY_HEIGHT_MIN_PX: u32 = 320; //展开态窗口高度下限。
-    pub const OVERLAY_HEIGHT_MAX_PX: u32 = 900; //展开态窗口高度上限。
+    // 所有窗口规格由 `react/src/spec/window.json` 生成，React、CSS 和 Rust
+    // 不再各自维护一份会漂移的窗口几何常量。
+    include!(concat!(env!("OUT_DIR"), "/window_spec.rs"));
 }
 
 // 应用主题。
@@ -125,10 +88,34 @@ pub struct ResizeWindowRequest {
     pub height: u32,
 }
 
+// 更新自动收起配置时由前端提交的字段级请求。
+//
+// 这里只接收目标字段，避免旧的 Settings 快照覆盖窗口状态或其他配置。
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAutoCollapseRequest {
+    pub enabled: bool, // 是否允许鼠标离开侧栏后自动收起。
+}
+
+// 更新开机自启动配置时由前端提交的字段级请求。
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAutoStartRequest {
+    pub enabled: bool, // 是否随 Windows 登录自动启动。
+}
+
+// 更新主题配置时由前端提交的字段级请求。
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateThemeRequest {
+    pub theme: Theme, // 要保存的主题。
+}
+
 // DeskCrate 的持久化应用配置，对应 `config.json`。
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
+    pub revision: u64,          // 配置修订号；整体更新接口用它拒绝过期快照。
     pub theme: Theme,           // 当前应用主题。
     pub window: WindowSettings, // 主窗口的位置和尺寸配置。
     pub view_mode: ViewMode,    // 侧栏当前是展开态还是收起态。

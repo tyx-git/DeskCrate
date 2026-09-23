@@ -176,6 +176,31 @@ impl JsonStore {
         self.with_file_lock(lock_path, || Self::write_json(file_path, value))
     }
 
+    // 在指定文件锁内执行一次完整的读改写事务。
+    //
+    // 数据文件和配置文件的读取策略不同，但锁、快照修改和原子写入的
+    // 结构完全相同；把这部分集中起来，避免两个仓储实现发生漂移。
+    fn mutate_locked<T, Load, Operation, R>(
+        &self,
+        file_path: &Path,
+        lock_path: &Path,
+        load: Load,
+        operation: Operation,
+    ) -> AppResult<R>
+    where
+        T: serde::Serialize,
+        Load: FnOnce() -> AppResult<T>,
+        Operation: FnOnce(&mut T) -> AppResult<R>,
+    {
+        self.with_file_lock(lock_path, || {
+            mutate_snapshot(
+                load,
+                |snapshot| Self::write_json(file_path, snapshot),
+                operation,
+            )
+        })
+    }
+
     fn read_json<T>(path: &Path) -> AppResult<T>
     where
         T: serde::de::DeserializeOwned,
@@ -425,18 +450,14 @@ impl DataRepository for JsonStore {
     where
         F: FnOnce(&mut AppData) -> AppResult<R>,
     {
-        // 读取、业务修改和原子替换必须共享同一把跨进程锁；否则两个
+        // 读取、业务修改和原子替换必须共享同一把跨进程锁，否则两个
         // 进程都基于旧快照修改时，后写入者会丢失前一个进程的更新。
-        //
-        // 读取走 `read_data_or_report` 而不是裸 `read_json`，这样数据文件损坏时
-        // 同样会先留下副本，并给出「哪个文件坏了、副本在哪」的可操作错误。
-        self.with_file_lock(&self.data_lock_path, || {
-            mutate_snapshot(
-                || self.read_data_or_report(),
-                |data| Self::write_json(&self.data_path, data),
-                operation,
-            )
-        })
+        self.mutate_locked(
+            &self.data_path,
+            &self.data_lock_path,
+            || self.read_data_or_report(),
+            operation,
+        )
     }
 }
 
@@ -455,12 +476,15 @@ impl SettingsRepository for JsonStore {
         // 与 `mutate_data` 同理，读取必须走带恢复的版本：收起/展开、保存几何、
         // 补写用户尺寸都经由这条路径，只修 `load_settings` 的话配置一旦损坏，
         // 窗口就再也收不起来了。
-        self.with_file_lock(&self.config_lock_path, || {
-            mutate_snapshot(
-                || self.read_settings_or_rebuild(),
-                |settings| Self::write_json(&self.config_path, settings),
-                operation,
-            )
-        })
+        self.mutate_locked(
+            &self.config_path,
+            &self.config_lock_path,
+            || self.read_settings_or_rebuild(),
+            |settings| {
+                let result = operation(settings)?;
+                settings.revision = settings.revision.saturating_add(1);
+                Ok(result)
+            },
+        )
     }
 }

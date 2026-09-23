@@ -1,10 +1,21 @@
 import { create } from 'zustand'
 
 import { backend, describeError, toAppError } from '../api'
-import { readCollapseMap, writeCollapse } from '../lib/collapseStorage'
-import { insertRootApp, removeRootApp } from '../lib/tree'
-import { isAppsRoot } from '../types/catalog'
-import type { AppData, AppEXE, Category, Group, Item, RootItem } from '../types/catalog'
+import {
+  appendCategory as appendCategoryData,
+  appendChild as appendChildData,
+  insertApp as insertAppData,
+  patchIcon as patchIconData,
+  removeApp as removeAppData,
+  removeCategory as removeCategoryData,
+  removeGroup as removeGroupData,
+  renameApp as renameAppData,
+  renameCategory as renameCategoryData,
+  renameGroup as renameGroupData,
+  toggleCollapse as toggleCollapseData,
+} from '../lib/catalogMutations'
+import type { AppData, AppEXE, Category, Group } from '../types/catalog'
+import type { AddAppsResponse } from '../types/catalog'
 import type { AppError } from '../types/error'
 import { useUiStore } from './uiStore'
 
@@ -35,6 +46,11 @@ interface CatalogState {
     name?: string,
     rootIndex?: number,
   ) => Promise<AppEXE | null>
+  addApps: (
+    parentId: string | null,
+    sourcePaths: string[],
+    rootIndex?: number,
+  ) => Promise<AddAppsResponse>
   /**
    * 把一个应用移动到新位置（拖拽换位）。
    *
@@ -50,7 +66,7 @@ interface CatalogState {
   deleteApp: (id: string) => Promise<boolean>
 
   launchApp: (app: AppEXE) => Promise<void>
-  toggleCollapse: (id: string, isCollapsed: boolean) => void
+  toggleCollapse: (id: string, isCollapsed: boolean) => Promise<void>
   /**
    * 把某个应用的图标换掉，用于后台补抓到网址图标之后回填。
    *
@@ -61,7 +77,41 @@ interface CatalogState {
 }
 
 const EMPTY: AppData = { version: 2, items: [] }
+const collapseRequestVersions = new Map<string, number>()
+// 后端补图事件可能早于 add_app IPC 返回到达。事件到达时应用还不在
+// Zustand 树中就先暂存，待 addApp/addApps 把应用插入后立即回填，避免
+// 快速站点（例如 GitHub）被占位地球图标覆盖。
+const pendingIconUrls = new Map<string, string>()
 
+function insertAppAndApplyPendingIcon(
+  data: AppData,
+  app: AppEXE,
+  parentId: string | null,
+  rootIndex?: number,
+): AppData {
+  const inserted = insertAppData(data, app, parentId, rootIndex)
+  const pendingIconUrl = pendingIconUrls.get(app.id)
+  if (pendingIconUrl === undefined) {
+    return inserted
+  }
+
+  pendingIconUrls.delete(app.id)
+  return patchIconData(inserted, app.id, pendingIconUrl)
+}
+
+function applyPendingIcons(data: AppData): AppData {
+  let next = data
+  for (const [appId, iconUrl] of pendingIconUrls) {
+    const patched = patchIconData(next, appId, iconUrl)
+    if (patched !== next) {
+      pendingIconUrls.delete(appId)
+      next = patched
+    }
+  }
+  return next
+}
+
+// 目录树变换已抽到 `lib/catalogMutations.ts`；这里保留 IPC 编排、状态提交和提示。
 export const useCatalogStore = create<CatalogState>((set, get) => ({
   data: EMPTY,
   status: 'loading',
@@ -72,7 +122,7 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     set({ status: 'loading', error: null })
     try {
       const data = await backend.getAllData()
-      set({ data: applyCollapseOverrides(data), status: 'ready' })
+      set({ data: applyPendingIcons(data), status: 'ready' })
     } catch (error) {
       set({ status: 'error', error: toAppError(error) })
     }
@@ -82,7 +132,7 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     return run(set, get, null, async () => {
       const category = await backend.addCategory(name)
       set((state) => ({
-        data: { ...state.data, items: [...state.data.items, { Category: category }] },
+        data: appendCategoryData(state.data, category),
       }))
       return category
     })
@@ -92,7 +142,7 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     return run(set, get, false, async () => {
       const updated = await backend.renameCategory(id, name)
       set((state) => ({
-        data: { ...state.data, items: mapCategories(state.data.items, id, (category) => ({ ...category, name: updated.name })) },
+        data: renameCategoryData(state.data, id, updated.name),
       }))
       return true
     })
@@ -102,12 +152,7 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     return run(set, get, false, async () => {
       await backend.deleteCategory(id)
       set((state) => ({
-        data: {
-          ...state.data,
-          items: state.data.items.filter(
-            (item) => !('Category' in item && item.Category.id === id),
-          ),
-        },
+        data: removeCategoryData(state.data, id),
       }))
       return true
     })
@@ -117,7 +162,7 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     return run(set, get, null, async () => {
       const group = await backend.addGroup(parentId, name)
       set((state) => ({
-        data: { ...state.data, items: appendToParent(state.data.items, parentId, { Group: group }) },
+        data: appendChildData(state.data, parentId, { Group: group }),
       }))
       return group
     })
@@ -127,13 +172,7 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     return run(set, get, false, async () => {
       const updated = await backend.renameGroup(id, name)
       set((state) => ({
-        data: {
-          ...state.data,
-          items: mapCategoryChildren(state.data.items, (category) => ({
-            ...category,
-            groups: renameInItems(category.groups, id, updated.name),
-          })),
-        },
+        data: renameGroupData(state.data, id, updated.name),
       }))
       return true
     })
@@ -143,13 +182,7 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     return run(set, get, false, async () => {
       await backend.deleteGroup(id)
       set((state) => ({
-        data: {
-          ...state.data,
-          items: mapCategoryChildren(state.data.items, (category) => ({
-            ...category,
-            groups: removeNode(category.groups, id),
-          })),
-        },
+        data: removeGroupData(state.data, id),
       }))
       return true
     })
@@ -159,15 +192,26 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     return run(set, get, null, async () => {
       const app = await backend.addApp(parentId, sourcePath, name, rootIndex)
       set((state) => ({
-        data: {
-          ...state.data,
-          items:
-            parentId === null
-              ? insertRootApp(state.data.items, app, rootIndex ?? Number.MAX_SAFE_INTEGER)
-              : appendToParent(state.data.items, parentId, { App: app }),
-        },
+        data: insertAppAndApplyPendingIcon(state.data, app, parentId, rootIndex),
       }))
       return app
+    })
+  },
+
+  async addApps(parentId, sourcePaths, rootIndex) {
+    return run(set, get, { added: [], failed: [] }, async () => {
+      const result = await backend.addApps(parentId, sourcePaths, rootIndex)
+      if (result.added.length > 0) {
+        set((state) => {
+          const data = result.added.reduce(
+            (current, app) =>
+              insertAppAndApplyPendingIcon(current, app, parentId, rootIndex),
+            state.data,
+          )
+          return { data }
+        })
+      }
+      return result
     })
   },
 
@@ -177,7 +221,7 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     return run(set, get, false, async () => {
       await backend.moveApp(id, parentId, beforeId)
       const fresh = await backend.getAllData()
-      set({ data: applyCollapseOverrides(fresh) })
+      set({ data: applyPendingIcons(fresh) })
       return true
     })
   },
@@ -185,21 +229,7 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
   async renameApp(id, name) {
     return run(set, get, false, async () => {
       const updated = await backend.renameApp(id, name)
-      const rename = (app: AppEXE): AppEXE =>
-        app.id === id ? { ...app, name: updated.name } : app
-      set((state) => ({
-        data: {
-          ...state.data,
-          items: state.data.items.map((item) => {
-            if (isAppsRoot(item)) {
-              return { Apps: item.Apps.map(rename) }
-            }
-            return {
-              Category: { ...item.Category, groups: renameInItems(item.Category.groups, id, updated.name) },
-            }
-          }),
-        },
-      }))
+      set((state) => ({ data: renameAppData(state.data, id, updated.name) }))
       return true
     })
   },
@@ -208,7 +238,7 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     return run(set, get, false, async () => {
       await backend.deleteApp(id)
       set((state) => ({
-        data: { ...state.data, items: removeRootApp(state.data.items, id) },
+        data: removeAppData(state.data, id),
       }))
       return true
     })
@@ -226,98 +256,30 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
 
   applyIcon(appId, iconUrl) {
     set((state) => {
-      let changed = false
-      const items = state.data.items.map((item) => {
-        if (isAppsRoot(item)) {
-          return {
-            Apps: item.Apps.map((app) =>
-              app.id === appId ? { ...app, iconUrl } : app,
-            ),
-          }
-        }
-        const category = item.Category
-        return {
-          Category: {
-            ...category,
-            groups: patchIconUrl(category.groups, appId, iconUrl, () => {
-              changed = true
-            }),
-          },
-        }
-      })
-      return changed ? { data: { ...state.data, items } } : {}
+      const data = patchIconData(state.data, appId, iconUrl)
+      if (data === state.data) {
+        pendingIconUrls.set(appId, iconUrl)
+      } else {
+        pendingIconUrls.delete(appId)
+      }
+      return { data }
     })
   },
 
-  toggleCollapse(id, isCollapsed) {
-    writeCollapse(id, isCollapsed)
-    set((state) => ({
-      data: {
-        ...state.data,
-        items: state.data.items.map((item) => {
-          if (!('Category' in item)) {
-            return item
-          }
-          const category = item.Category
-          if (category.id === id) {
-            return { Category: { ...category, isCollapsed } }
-          }
-          return {
-            Category: {
-              ...category,
-              groups: collapseInItems(category.groups, id, isCollapsed),
-            },
-          }
-        }),
-      },
-    }))
+  async toggleCollapse(id, isCollapsed) {
+    const version = (collapseRequestVersions.get(id) ?? 0) + 1
+    collapseRequestVersions.set(id, version)
+    set((state) => ({ data: toggleCollapseData(state.data, id, isCollapsed) }))
+    try {
+      await backend.setNodeCollapsed(id, isCollapsed)
+    } catch (error) {
+      if (collapseRequestVersions.get(id) === version) {
+        set((state) => ({ data: toggleCollapseData(state.data, id, !isCollapsed) }))
+      }
+      useUiStore.getState().notify('error', `保存折叠状态失败：${describeError(toAppError(error))}`)
+    }
   },
 }))
-
-/** 在一层节点里替换某个应用的图标地址；命中时调用 `onHit`。 */
-function patchIconUrl(
-  items: Item[],
-  appId: string,
-  iconUrl: string,
-  onHit: () => void,
-): Item[] {
-  return items.map((entry) => {
-    if ('App' in entry) {
-      if (entry.App.id !== appId) {
-        return entry
-      }
-      onHit()
-      return { App: { ...entry.App, iconUrl } }
-    }
-    return {
-      Group: {
-        ...entry.Group,
-        children: patchIconUrl(entry.Group.children, appId, iconUrl, onHit),
-      },
-    }
-  })
-}
-
-/** 只改动根节点上 id 命中的那一个分类。 */
-function mapCategories(
-  items: RootItem[],
-  id: string,
-  update: (category: Category) => Category,
-): RootItem[] {
-  return items.map((item) =>
-    'Category' in item && item.Category.id === id
-      ? { Category: update(item.Category) }
-      : item,
-  )
-}
-
-/** 对根节点上每一个分类的 groups 做同样的变换。 */
-function mapCategoryChildren(
-  items: RootItem[],
-  update: (category: Category) => Category,
-): RootItem[] {
-  return items.map((item) => ('Category' in item ? { Category: update(item.Category) } : item))
-}
 
 
 /**
@@ -345,144 +307,4 @@ async function run<T>(
   } finally {
     set({ busy: false })
   }
-}
-
-/** 把本地保存的折叠偏好叠加到后端返回的数据树上。 */
-function applyCollapseOverrides(data: AppData): AppData {
-  const overrides = readCollapseMap()
-  if (Object.keys(overrides).length === 0) {
-    return data
-  }
-
-  return {
-    ...data,
-    items: data.items.map((item) =>
-      'Category' in item
-        ? {
-            Category: {
-              ...item.Category,
-              isCollapsed: overrides[item.Category.id] ?? item.Category.isCollapsed,
-              groups: applyToItems(item.Category.groups, overrides),
-            },
-          }
-        : item,
-    ),
-  }
-}
-
-function applyToItems(items: Item[], overrides: Record<string, boolean>): Item[] {
-  return items.map((item) => {
-    if ('App' in item) {
-      return item
-    }
-
-    return {
-      Group: {
-        ...item.Group,
-        isCollapsed: overrides[item.Group.id] ?? item.Group.isCollapsed,
-        children: applyToItems(item.Group.children, overrides),
-      },
-    }
-  })
-}
-
-/** 把目标节点的展示名称替换为新名称，分组与应用共用。 */
-function renameInItems(items: Item[], id: string, name: string): Item[] {
-  return items.map((item): Item => {
-    if ('App' in item) {
-      return item.App.id === id ? { App: { ...item.App, name } } : item
-    }
-
-    if (item.Group.id === id) {
-      return { Group: { ...item.Group, name } }
-    }
-
-    return {
-      Group: { ...item.Group, children: renameInItems(item.Group.children, id, name) },
-    }
-  })
-}
-
-/** 只翻转目标节点的折叠标记。 */
-function collapseInItems(items: Item[], id: string, isCollapsed: boolean): Item[] {
-  return items.map((item): Item => {
-    if ('App' in item) {
-      return item
-    }
-
-    if (item.Group.id === id) {
-      return { Group: { ...item.Group, isCollapsed } }
-    }
-
-    return {
-      Group: {
-        ...item.Group,
-        children: collapseInItems(item.Group.children, id, isCollapsed),
-      },
-    }
-  })
-}
-
-/**
- * 把新节点追加到目标父节点下。父节点既可能是分类本身，也可能是某个分组。
- *
- * `appendChild` 只在 `category.groups` 里递归匹配分组，匹配不到「分类自己」，
- * 所以这里必须先判断分类这一层，再落到分组层。
- *
- * 父节点若处于折叠状态就一并展开，否则新增的条目会被折叠起来，看起来像没加上。
- */
-function appendToParent(roots: RootItem[], parentId: string, child: Item): RootItem[] {
-  return roots.map((item) => {
-    // 顶层应用那一行不能当容器，原样放过。
-    if (!('Category' in item)) {
-      return item
-    }
-
-    const category = item.Category
-    return category.id === parentId
-      ? {
-          Category: { ...category, isCollapsed: false, groups: [...category.groups, child] },
-        }
-      : { Category: { ...category, groups: appendChild(category.groups, parentId, child) } }
-  })
-}
-
-/** 把新节点追加到指定分组的子节点下；父分组不存在时保持原样。 */
-function appendChild(items: Item[], parentId: string, child: Item): Item[] {  return items.map((item): Item => {
-    if ('App' in item) {
-      return item
-    }
-
-    if (item.Group.id === parentId) {
-      return {
-        Group: {
-          ...item.Group,
-          isCollapsed: false,
-          children: [...item.Group.children, child],
-        },
-      }
-    }
-
-    return {
-      Group: {
-        ...item.Group,
-        children: appendChild(item.Group.children, parentId, child),
-      },
-    }
-  })
-}
-
-/** 从树中删除指定 ID 的节点。 */
-function removeNode(items: Item[], id: string): Item[] {
-  return items.flatMap((item): Item[] => {
-    if ('App' in item) {
-      return item.App.id === id ? [] : [item]
-    }
-
-    if (item.Group.id === id) {
-      return []
-    }
-
-    return [{ Group: { ...item.Group, children: removeNode(item.Group.children, id) } }]
-  })
 }

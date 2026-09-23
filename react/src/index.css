@@ -34,12 +34,12 @@
   --spacing-field-x: clamp(8px, 5.333cqw, 14px); /* 1vw 搜索框横向内边距 */
 
   /* 窗口留白：与 Rust 侧 OVERLAY_SHADOW_GUTTER_PX / SIDEBAR_LEFT_PX 对齐 */
-  --spacing-gutter: 16px;
-  --spacing-edge: 2px;
+  --spacing-gutter: var(--dc-spec-gutter);
+  --spacing-edge: var(--dc-spec-sidebar-left);
   /* 指示条尺寸：与 Rust 侧 COLLAPSED_STRIP_WIDTH/HEIGHT_PX 对齐，收束动画的目标
      形状也是这个尺寸（见 .dc-stage--converged）。 */
-  --spacing-strip-w: 3px;
-  --spacing-strip-h: 80px;
+  --spacing-strip-w: var(--dc-spec-strip-width);
+  --spacing-strip-h: var(--dc-spec-strip-height);
 
   /* ---- 色板：中性·柔白 ---- */
   --color-panel: rgb(235 235 240 / 0.55); /* 侧栏玻璃底色 */
@@ -66,13 +66,13 @@
   --color-drop-active: rgb(58 96 190 / 0.85);
 
   /* ---- 形状 ---- */
-  --radius-panel: 10px;
+  --radius-panel: var(--dc-spec-panel-radius);
   --radius-field: 10px;
   --radius-chip: 3px;
-  --radius-strip: 1.5px;
+  --radius-strip: var(--dc-spec-strip-radius);
   --radius-sheet: 10px;
 
-  --blur-glass: 28px; /* 侧栏背景模糊 */
+  --blur-glass: var(--dc-spec-glass-blur); /* 侧栏背景模糊 */
   --blur-sheet: 20px; /* 菜单与对话框模糊 */
 
   --shadow-panel:
@@ -118,8 +118,8 @@
 
   /* 滚动条压到最细，避免遮挡玻璃面板的圆角与边缘高光。 */
   ::-webkit-scrollbar {
-    width: 4px;
-    height: 4px;
+    width: var(--dc-spec-scrollbar-width);
+    height: var(--dc-spec-scrollbar-width);
   }
 
   ::-webkit-scrollbar-thumb {
@@ -216,7 +216,7 @@ body.dc-resizing {
 
 .dc-stage--converged {
   /* 收起时的目标状态：只剩左上角 3×80 一条，正好是收起态指示条的形状。 */
-  clip-path: inset(0 calc(100% - 3px) calc(100% - 80px) 0 round 1.5px);
+  clip-path: inset(0 calc(100% - var(--spacing-strip-w)) calc(100% - var(--spacing-strip-h)) 0 round var(--radius-strip));
   /* 顺带把背景提亮到指示条的柔白，窗口缩小交给指示条时看不出换手。 */
   background-color: rgb(255 255 255 / 0.6);
   transition:

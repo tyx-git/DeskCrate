@@ -3,8 +3,10 @@ import { createRoot } from 'react-dom/client'
 
 import './index.css'
 import App from './App'
-import { backend, describeError, toAppError } from './api'
+import { backend } from './api'
+import { runBootstrap } from './lib/bootstrapController'
 import { showMainWindow } from './lib/window'
+import { applyWindowSpecCssVariables } from './spec/windowSpec'
 import { useCatalogStore } from './state/catalogStore'
 import { useSettingsStore } from './state/settingsStore'
 import { useUiStore } from './state/uiStore'
@@ -24,29 +26,12 @@ import { useUiStore } from './state/uiStore'
  * 宽度，收起态那 29 物理像素宽的窗口会被撑成一大块白条。详见
  * `settingsStore.syncWindowGeometry`。
  */
-async function bootstrap() {
-  try {
-    await backend.getWindowInit()
-  } catch (error) {
-    useUiStore
-      .getState()
-      .notify('error', `窗口初始化失败：${describeError(toAppError(error))}`)
-  }
-
-  // 两个 store 的 load 内部已经各自兜底，不会抛出。
-  await Promise.all([
-    useCatalogStore.getState().load(),
-    useSettingsStore.getState().load(),
-  ])
-
-  await showMainWindow()
-  await useSettingsStore.getState().syncWindowGeometry()
-}
-
 const container = document.getElementById('root')
 if (!container) {
   throw new Error('找不到 #root 挂载点')
 }
+
+applyWindowSpecCssVariables()
 
 createRoot(container).render(
   <StrictMode>
@@ -54,7 +39,15 @@ createRoot(container).render(
   </StrictMode>,
 )
 
-// 兜底：任何一步异常都不应该让窗口永远不可见。
-window.setTimeout(() => void showMainWindow(), 3000)
-
-void bootstrap()
+void runBootstrap({
+  subscribeIconReady: () =>
+    backend.onIconReady(({ appId, iconUrl }) => {
+      useCatalogStore.getState().applyIcon(appId, iconUrl)
+    }),
+  initializeWindow: () => backend.getWindowInit(),
+  loadCatalog: () => useCatalogStore.getState().load(),
+  loadSettings: () => useSettingsStore.getState().load(),
+  showWindow: showMainWindow,
+  syncWindowGeometry: () => useSettingsStore.getState().syncWindowGeometry(),
+  notify: (message) => useUiStore.getState().notify('error', message),
+})

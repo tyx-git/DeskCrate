@@ -1,6 +1,8 @@
 use crate::{
     error::AppResult,
-    models::{AppError, Settings},
+    models::{
+        AppError, Settings, UpdateAutoCollapseRequest, UpdateAutoStartRequest, UpdateThemeRequest,
+    },
     state::AppState,
     storage::SettingsRepository,
     system,
@@ -12,6 +14,47 @@ pub fn get_settings(state: &AppState) -> AppResult<Settings> {
     store.load_settings()
 }
 
+// 按字段更新自动收起配置，避免提交整个 Settings 快照。
+pub fn update_auto_collapse(
+    state: &AppState,
+    request: UpdateAutoCollapseRequest,
+) -> AppResult<Settings> {
+    mutate_settings(state, |settings| {
+        settings.auto_collapse = request.enabled;
+        Ok(())
+    })
+}
+
+// 按字段更新主题配置，避免提交整个 Settings 快照。
+pub fn update_theme(state: &AppState, request: UpdateThemeRequest) -> AppResult<Settings> {
+    mutate_settings(state, |settings| {
+        settings.theme = request.theme;
+        Ok(())
+    })
+}
+
+// 按字段更新开机自启动配置，并同步 Windows Run 注册表。
+pub fn update_auto_start(state: &AppState, request: UpdateAutoStartRequest) -> AppResult<Settings> {
+    let store = state.get_lock()?;
+    store.mutate_settings(|settings| {
+        if settings.auto_start != request.enabled {
+            system::registory::set_auto_start_enabled(request.enabled)?;
+            settings.auto_start = request.enabled;
+        }
+        validate_settings(settings)?;
+        Ok(())
+    })?;
+    store.load_settings()
+}
+
+// 清除展开态窗口尺寸覆盖，只修改对应字段。
+pub fn clear_window_size_override(state: &AppState) -> AppResult<Settings> {
+    mutate_settings(state, |settings| {
+        settings.window.size_override = None;
+        Ok(())
+    })
+}
+
 // 校验并持久化应用配置。
 //
 // 当前配置主要由窗口层使用，因此先保证保存的窗口宽高是有效的；
@@ -19,19 +62,42 @@ pub fn get_settings(state: &AppState) -> AppResult<Settings> {
 pub fn update_settings(state: &AppState, settings: Settings) -> AppResult<Settings> {
     validate_settings(&settings)?;
 
-    // 开机自启动落在注册表里，先动它再落盘：注册表写失败就整体不生效，
-    // 不会留下「配置说开了、系统却不启动」的分裂状态。
-    let store = state.get_lock()?;
-    let previous = store.load_settings()?;
-    if previous.auto_start != settings.auto_start {
-        system::registory::set_auto_start_enabled(settings.auto_start)?;
-    }
+    // 兼容接口必须携带当前修订号。否则旧快照无法区分“用户确实想把字段
+    // 改回旧值”和“并发更新后仍在提交旧数据”，后者会静默覆盖新配置。
+    mutate_settings(state, |current| {
+        if current.revision != settings.revision {
+            return Err(AppError::new(
+                "settings_revision_conflict",
+                format!(
+                    "配置已被更新，请刷新后重试（当前修订号: {}，请求修订号: {}）",
+                    current.revision, settings.revision
+                ),
+            ));
+        }
 
-    store.mutate_settings(|current| {
+        if current.auto_start != settings.auto_start {
+            system::registory::set_auto_start_enabled(settings.auto_start)?;
+        }
         *current = settings.clone();
         Ok(())
     })?;
-    Ok(settings)
+    // `mutate_settings` 返回的是原子事务提交后的快照，包含递增后的 revision。
+    let store = state.get_lock()?;
+    store.load_settings()
+}
+
+// 对字段级设置操作统一执行校验和原子读改写。
+fn mutate_settings<F>(state: &AppState, operation: F) -> AppResult<Settings>
+where
+    F: FnOnce(&mut Settings) -> AppResult<()>,
+{
+    let store = state.get_lock()?;
+    store.mutate_settings(|settings| {
+        operation(settings)?;
+        validate_settings(settings)?;
+        Ok(())
+    })?;
+    store.load_settings()
 }
 
 // 启动时把开机自启动对一次账。

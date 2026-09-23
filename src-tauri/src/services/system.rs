@@ -7,6 +7,7 @@ use crate::{
     state::AppState,
     storage::DataRepository,
     system::{executor, shortcut},
+    text,
 };
 
 use super::tree;
@@ -69,24 +70,17 @@ fn build_launch_spec(app: &AppEXE) -> AppResult<LaunchSpec> {
         return Ok(LaunchSpec {
             target_path: PathBuf::from(shortcut.target_path),
             working_dir: optional_path(shortcut.working_dir.as_deref()),
-            arguments: non_empty_text(shortcut.arguments.as_deref()),
+            arguments: text::optional_trimmed(shortcut.arguments.as_deref()).map(str::to_owned),
         });
     }
 
     Ok(LaunchSpec {
         target_path: source_path.to_path_buf(),
         working_dir: optional_path(app.working_dir.as_deref()),
-        arguments: non_empty_text(app.arguments.as_deref()),
+        arguments: text::optional_trimmed(app.arguments.as_deref()).map(str::to_owned),
     })
 }
 
 fn optional_path(value: Option<&str>) -> Option<PathBuf> {
-    non_empty_text(value).map(PathBuf::from)
-}
-
-fn non_empty_text(value: Option<&str>) -> Option<String> {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
+    text::optional_trimmed(value).map(PathBuf::from)
 }

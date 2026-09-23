@@ -3,8 +3,9 @@ use tauri::Emitter;
 use crate::{
     error::AppResult,
     models::{
-        AddAppRequest, AddCategoryRequest, AddGroupRequest, AppData, AppEXE, Category,
-        DeleteRequest, Group, MoveAppRequest, RenameRequest,
+        AddAppRequest, AddAppsRequest, AddAppsResponse, AddCategoryRequest, AddGroupRequest,
+        AppData, AppEXE, Category, DeleteRequest, Group, MoveAppRequest, RenameRequest,
+        SetNodeCollapsedRequest,
     },
     services,
     state::AppState,
@@ -65,8 +66,47 @@ pub fn delete_group(id: String, state: tauri::State<'_, AppState>) -> AppResult<
     services::catalog::delete_group(state.inner(), DeleteRequest { id })
 }
 
+// 持久化分类或分组的折叠状态。
+#[tauri::command]
+pub fn set_node_collapsed(
+    id: String,
+    is_collapsed: bool,
+    state: tauri::State<'_, AppState>,
+) -> AppResult<()> {
+    services::catalog::set_node_collapsed(
+        state.inner(),
+        SetNodeCollapsedRequest { id, is_collapsed },
+    )
+}
+
 // 后台抓到网址图标后发出的事件名。前端监听它，把占位图标换成真实图标。
 pub const ICON_READY_EVENT: &str = "dc://icon-ready";
+
+// 为网址应用启动后台图标补抓，并把结果转成前端事件。
+fn schedule_url_icon_refresh<R: tauri::Runtime>(
+    state: &AppState,
+    app: &tauri::AppHandle<R>,
+    app_id: String,
+) -> AppResult<()> {
+    let store = state.get_lock()?.clone();
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let state = AppState::new(store);
+        match services::catalog::refresh_url_icon(&state, &app_id) {
+            Ok(Some(icon_url)) => {
+                if let Err(error) = app.emit(
+                    ICON_READY_EVENT,
+                    serde_json::json!({ "appId": app_id, "iconUrl": icon_url }),
+                ) {
+                    log::warn!("通知图标就绪失败: {error}");
+                }
+            }
+            Ok(None) => log::debug!("{app_id} 没有可补的网址图标，继续用内置图标"),
+            Err(error) => log::debug!("补抓 {app_id} 的网址图标失败: {}", error.message),
+        }
+    });
+    Ok(())
+}
 
 // 添加应用或快捷方式；图标和快捷方式字段由服务层自动解析。
 //
@@ -102,29 +142,37 @@ pub fn add_app(
     // `false`，连线程都不起。
     if services::catalog::needs_url_icon(&created) {
         let app_id = created.id.clone();
-        let store = state.get_lock()?.clone();
-        std::thread::spawn(move || {
-            let state = AppState::new(store);
-            match services::catalog::refresh_url_icon(&state, &app_id) {
-                Ok(Some(icon_url)) => {
-                    if let Err(error) = app.emit(
-                        ICON_READY_EVENT,
-                        serde_json::json!({ "appId": app_id, "iconUrl": icon_url }),
-                    ) {
-                        log::warn!("通知图标就绪失败: {error}");
-                    }
-                }
-                Ok(None) => {
-                    log::debug!("{app_id} 没有可补的网址图标，继续用内置图标");
-                }
-                Err(error) => {
-                    log::debug!("补抓 {app_id} 的网址图标失败: {}", error.message);
-                }
-            }
-        });
+        schedule_url_icon_refresh(state.inner(), &app, app_id)?;
     }
 
     Ok(created)
+}
+
+// 批量添加应用或快捷方式；成功项一次性写入，失败项返回明细。
+#[tauri::command]
+pub fn add_apps(
+    parent_id: Option<String>,
+    source_paths: Vec<String>,
+    root_index: Option<usize>,
+    state: tauri::State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> AppResult<AddAppsResponse> {
+    let result = services::catalog::add_apps(
+        state.inner(),
+        AddAppsRequest {
+            parent_id,
+            source_paths,
+            root_index,
+        },
+    )?;
+
+    for created in &result.added {
+        if services::catalog::needs_url_icon(created) {
+            schedule_url_icon_refresh(state.inner(), &app, created.id.clone())?;
+        }
+    }
+
+    Ok(result)
 }
 
 // 把一个应用移动到新位置（拖拽换位）。

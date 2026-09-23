@@ -1,4 +1,4 @@
-use std::{ffi::OsStr, path::Path};
+use std::path::Path;
 
 use windows::{
     core::{Interface, PCWSTR},
@@ -16,7 +16,7 @@ use crate::{
     error::AppResult,
     models::{AppError, IconLocation, ParsedShortcut},
     path,
-    system::wide,
+    system::{support, wide},
 };
 
 // Windows Shell Link API 使用的宽字符缓冲区大小。
@@ -39,21 +39,22 @@ pub(crate) fn parse_shortcut(path: &Path) -> AppResult<ParsedShortcut> {
     }
 
     let _com = ComApartment::initialize()?;
-    let wide_path = to_wide(path.as_os_str())?;
+    let wide_path =
+        wide::nul_terminated(path.as_os_str(), "shortcut_invalid_path", "快捷方式路径")?;
 
     let shell_link: IShellLinkW = unsafe {
         CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)
-            .map_err(|error| windows_error("shortcut_create_failed", error))?
+            .map_err(|error| support::windows_error("shortcut_create_failed", error))?
     };
 
     let persist_file: IPersistFile = shell_link
         .cast()
-        .map_err(|error| windows_error("shortcut_cast_failed", error))?;
+        .map_err(|error| support::windows_error("shortcut_cast_failed", error))?;
 
     unsafe {
         persist_file
             .Load(PCWSTR(wide_path.as_ptr()), STGM_READ)
-            .map_err(|error| windows_error("shortcut_load_failed", error))?;
+            .map_err(|error| support::windows_error("shortcut_load_failed", error))?;
     }
 
     let mut target_buffer = vec![0u16; PATH_BUFFER_LEN];
@@ -62,7 +63,7 @@ pub(crate) fn parse_shortcut(path: &Path) -> AppResult<ParsedShortcut> {
     unsafe {
         shell_link
             .GetPath(&mut target_buffer, &mut find_data, SLGP_RAWPATH.0 as u32)
-            .map_err(|error| windows_error("shortcut_target_failed", error))?;
+            .map_err(|error| support::windows_error("shortcut_target_failed", error))?;
     }
 
     let target_path = read_wide_string(&target_buffer).ok_or_else(|| {
@@ -130,11 +131,6 @@ impl Drop for ComApartment {
     }
 }
 
-// 把 Rust 的 Windows 路径转换成以 NUL 结尾的 UTF-16 字符串。
-fn to_wide(value: &OsStr) -> AppResult<Vec<u16>> {
-    wide::nul_terminated(value, "shortcut_invalid_path", "快捷方式路径")
-}
-
 // 读取 Windows API 写入的 NUL 结尾 UTF-16 缓冲区。
 fn read_wide_string(buffer: &[u16]) -> Option<String> {
     let end = buffer.iter().position(|character| *character == 0)?;
@@ -148,9 +144,4 @@ fn read_wide_string(buffer: &[u16]) -> Option<String> {
 // 默认使用快捷方式文件名作为前端展示名称。
 fn shortcut_name(path: &Path) -> String {
     path::display_name(path, "快捷方式")
-}
-
-// 将 Windows API 错误统一转换成项目错误模型。
-fn windows_error(code: &'static str, error: windows::core::Error) -> AppError {
-    AppError::new(code, format!("{error:?}"))
 }

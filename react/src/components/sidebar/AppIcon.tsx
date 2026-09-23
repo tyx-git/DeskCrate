@@ -37,8 +37,10 @@ export function AppIcon({
   onDrop,
   onDragEnd,
 }: AppIconProps) {
-  const [failed, setFailed] = useState(false)
-  const showImage = app.iconUrl.length > 0 && !failed
+  // 记录失败的是哪一个 URL，而不是一个永久布尔值。后台补图替换 URL 后，
+  // 新资源自然会重新尝试加载，不需要在 effect 里同步 setState。
+  const [failedUrl, setFailedUrl] = useState<string | null>(null)
+  const showImage = app.iconUrl.length > 0 && failedUrl !== app.iconUrl
 
   const draggingId = useUiStore((state) => state.draggingAppId)
   const dropHint = useUiStore((state) => state.dropHint)
@@ -75,7 +77,7 @@ export function AppIcon({
             src={app.iconUrl}
             alt=""
             draggable={false}
-            onError={() => setFailed(true)}
+            onError={() => setFailedUrl(app.iconUrl)}
             className="max-h-full max-w-full object-contain"
           />
         ) : (

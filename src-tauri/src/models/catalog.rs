@@ -65,6 +65,14 @@ pub struct DeleteRequest {
     pub id: String, // 要删除的节点 ID。
 }
 
+// 更新分类或分组折叠状态时使用的请求。
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SetNodeCollapsedRequest {
+    pub id: String,         // 分类或分组 ID。
+    pub is_collapsed: bool, // 是否折叠。
+}
+
 // 移动一个应用到新位置时由前端提交的请求数据。
 //
 // 拖拽改位置是「先摘下来、再插回去」两步，所以请求里只描述**目标**（父容器与
@@ -120,6 +128,33 @@ pub struct AddAppRequest {
     // —— 容器内目前一律追加到末尾。
     #[serde(default)]
     pub root_index: Option<usize>,
+}
+
+// 批量新增应用时提交的请求。
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AddAppsRequest {
+    pub parent_id: Option<String>, // 父分类或分组；None 表示顶层。
+    pub source_paths: Vec<String>, // 要导入的来源路径或网址。
+    #[serde(default)]
+    pub root_index: Option<usize>, // 顶层落点；放入容器时忽略。
+}
+
+// 批量导入中的单项失败信息。单项失败不影响其他来源继续导入。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchAddFailure {
+    pub source_path: String, // 失败的原始来源。
+    pub code: String,        // 稳定错误码。
+    pub message: String,     // 面向前端的错误说明。
+}
+
+// 批量导入结果。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AddAppsResponse {
+    pub added: Vec<AppEXE>,           // 成功写入的应用。
+    pub failed: Vec<BatchAddFailure>, // 未写入的来源及原因。
 }
 
 // 快捷方式或应用程序节点。
