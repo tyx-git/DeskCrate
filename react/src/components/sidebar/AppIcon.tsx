@@ -11,6 +11,7 @@ interface AppIconProps {
   onSelect: () => void
   onContextMenu: (event: React.MouseEvent<HTMLElement>) => void
   onDragStart: (event: React.DragEvent<HTMLElement>) => void
+  dragging?: boolean
   onDragOver: (event: React.DragEvent<HTMLElement>) => void
   onDrop: (event: React.DragEvent<HTMLElement>) => void
   onDragEnd: () => void
@@ -33,6 +34,7 @@ export function AppIcon({
   onSelect,
   onContextMenu,
   onDragStart,
+  dragging = false,
   onDragOver,
   onDrop,
   onDragEnd,
@@ -42,11 +44,8 @@ export function AppIcon({
   const [failedUrl, setFailedUrl] = useState<string | null>(null)
   const showImage = app.iconUrl.length > 0 && failedUrl !== app.iconUrl
 
-  const draggingId = useUiStore((state) => state.draggingAppId)
   const dropHint = useUiStore((state) => state.dropHint)
-
-  const isDragging = draggingId === app.id
-  const hint = dropHint?.appId === app.id ? dropHint.position : null
+  const hint = dropHint?.nodeId === app.id ? dropHint.position : null
 
   const surface = selected
     ? 'bg-active ring-1 ring-inset ring-focus'
@@ -66,7 +65,7 @@ export function AppIcon({
       onDrop={onDrop}
       onDragEnd={onDragEnd}
       className={`dc-app-icon relative flex w-icon-item shrink-0 flex-col items-center rounded-[6px] py-[0.6cqw] outline-none transition-colors duration-100 ${surface} ${
-        isDragging ? 'opacity-40' : ''
+        dragging ? 'opacity-40' : ''
       } ${hint === 'before' ? 'dc-drop-before' : ''} ${
         hint === 'after' ? 'dc-drop-after' : ''
       }`}

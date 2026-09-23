@@ -19,34 +19,39 @@ export function AppGrid({ apps, parentId = null }: AppGridProps) {
   const { selectedAppId, launch, selectApp, contextMenuForApp } = useTreeActions()
   const data = useCatalogStore((state) => state.data)
   const moveApp = useCatalogStore((state) => state.moveApp)
-  const draggingAppId = useUiStore((state) => state.draggingAppId)
-  const setDraggingApp = useUiStore((state) => state.setDraggingApp)
+  const moveGroup = useCatalogStore((state) => state.moveGroup)
+  const draggingNode = useUiStore((state) => state.draggingNode)
+  const setDraggingNode = useUiStore((state) => state.setDraggingNode)
   const setDropHint = useUiStore((state) => state.setDropHint)
 
-  const drag = useAppDrag({ data, moveApp, setDraggingApp, setDropHint, draggingAppId })
+  const drag = useAppDrag({ data, moveApp, moveGroup, setDraggingNode, setDropHint, draggingNode })
 
   return (
     <div
       className="dc-grid px-[5%] pt-[2%] pb-[1%]"
       onDragOver={(event) => {
-        // 只有正在拖应用时才接管，避免影响文件拖放。
-        if (!draggingAppId) return
+        // 只有正在拖动应用时，空白处才表示追加到该容器末尾。
+        if (draggingNode?.kind !== 'app') return
         event.preventDefault()
         event.dataTransfer.dropEffect = 'move'
       }}
-      onDrop={(event) => drag.onDropOnContainer(event, parentId)}
+      onDrop={(event) => {
+        if (event.target !== event.currentTarget) return
+        drag.onDropOnContainer(event, parentId)
+      }}
     >
       {apps.map((app) => (
         <AppIcon
           key={app.id}
           app={app}
           selected={selectedAppId === app.id}
+          dragging={draggingNode?.kind === 'app' && draggingNode.id === app.id}
           onLaunch={() => launch(app)}
           onSelect={() => selectApp(app)}
           onContextMenu={(event) => contextMenuForApp(event, app)}
-          onDragStart={(event) => drag.onDragStart(event, app)}
-          onDragOver={(event) => drag.onDragOverIcon(event, app)}
-          onDrop={(event) => drag.onDropOnIcon(event, app)}
+          onDragStart={(event) => drag.onDragStartApp(event, app)}
+          onDragOver={(event) => drag.onDragOverNode(event, { id: app.id, kind: 'app' })}
+          onDrop={(event) => drag.onDropOnNode(event, { id: app.id, kind: 'app' })}
           onDragEnd={drag.onDragEnd}
         />
       ))}

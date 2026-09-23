@@ -82,6 +82,9 @@ export const tauriBackend: Backend = {
   moveApp: (id: string, parentId: string | null, beforeId: string | null) =>
     invoke<void>(COMMANDS.moveApp, { id, parentId, beforeId }),
 
+  moveGroup: (id: string, parentId: string, beforeId: string | null) =>
+    invoke<void>(COMMANDS.moveGroup, { id, parentId, beforeId }),
+
   renameApp: (id: string, name: string) =>
     invoke<AppEXE>(COMMANDS.renameApp, { id, name }),
 

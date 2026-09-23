@@ -96,6 +96,16 @@ pub struct MoveAppRequest {
     pub before_id: Option<String>,
 }
 
+// 在原父容器中移动分组时由前端提交的请求。
+// `parent_id` 固定为该分组的当前父容器；服务层只允许同级重排，避免意外改变嵌套深度。
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct MoveGroupRequest {
+    pub id: String,
+    pub parent_id: String,
+    pub before_id: Option<String>,
+}
+
 // 新增子分组时由前端提交的请求数据。
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

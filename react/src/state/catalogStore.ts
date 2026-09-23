@@ -62,6 +62,7 @@ interface CatalogState {
     parentId: string | null,
     beforeId: string | null,
   ) => Promise<boolean>
+  moveGroup: (id: string, parentId: string, beforeId: string | null) => Promise<boolean>
   renameApp: (id: string, name: string) => Promise<boolean>
   deleteApp: (id: string) => Promise<boolean>
 
@@ -220,6 +221,15 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     // 免得前端的乐观更新和后端算出来的顺序不一致 —— 排序规则在后端。
     return run(set, get, false, async () => {
       await backend.moveApp(id, parentId, beforeId)
+      const fresh = await backend.getAllData()
+      set({ data: applyPendingIcons(fresh) })
+      return true
+    })
+  },
+
+  async moveGroup(id, parentId, beforeId) {
+    return run(set, get, false, async () => {
+      await backend.moveGroup(id, parentId, beforeId)
       const fresh = await backend.getAllData()
       set({ data: applyPendingIcons(fresh) })
       return true

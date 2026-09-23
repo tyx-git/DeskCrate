@@ -1,9 +1,12 @@
-import { IconButton } from '../common/IconButton'
-import { Row } from './Row'
-import { AppGrid } from './AppGrid'
-import { useTreeActions } from './treeActions'
-import { asApp, asGroup, type AppEXE, type Group, type Item } from '../../types/catalog'
+import { useAppDrag } from '../../hooks/useAppDrag'
 import { countApps } from '../../lib/tree'
+import { useCatalogStore } from '../../state/catalogStore'
+import { useUiStore } from '../../state/uiStore'
+import { asApp, asGroup, type AppEXE, type Group, type Item } from '../../types/catalog'
+import { IconButton } from '../common/IconButton'
+import { AppGrid } from './AppGrid'
+import { Row } from './Row'
+import { useTreeActions } from './treeActions'
 
 interface ItemListProps {
   items: Item[]
@@ -44,6 +47,14 @@ function toBlocks(items: Item[]): Block[] {
 /** 递归渲染一层节点：应用进网格，分组继续往下递归。 */
 export function ItemList({ items, depth, parentId, parentKind }: ItemListProps) {
   const { activeDropId, toggleCollapse, contextMenuForNode, addAppTo } = useTreeActions()
+  const data = useCatalogStore((state) => state.data)
+  const moveApp = useCatalogStore((state) => state.moveApp)
+  const moveGroup = useCatalogStore((state) => state.moveGroup)
+  const draggingNode = useUiStore((state) => state.draggingNode)
+  const setDraggingNode = useUiStore((state) => state.setDraggingNode)
+  const dropHint = useUiStore((state) => state.dropHint)
+  const setDropHint = useUiStore((state) => state.setDropHint)
+  const drag = useAppDrag({ data, moveApp, moveGroup, setDraggingNode, setDropHint, draggingNode })
 
   return (
     <>
@@ -73,6 +84,16 @@ export function ItemList({ items, depth, parentId, parentKind }: ItemListProps) 
               collapsed={group.isCollapsed}
               dropId={group.id}
               isDropTarget={activeDropId === group.id}
+              draggable
+              onDragStart={(event) => drag.onDragStartGroup(event, group)}
+              onDragOver={(event) =>
+                drag.onDragOverNode(event, { id: group.id, kind: 'group' }, 'y')
+              }
+              onDrop={(event) =>
+                drag.onDropOnNode(event, { id: group.id, kind: 'group' }, 'y')
+              }
+              onDragEnd={drag.onDragEnd}
+              dropPosition={dropHint?.nodeId === group.id ? dropHint.position : null}
               onToggle={() => toggleCollapse(group.id, !group.isCollapsed)}
               onContextMenu={(event) => contextMenuForNode(event, location)}
               trailing={

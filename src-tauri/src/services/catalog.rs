@@ -9,7 +9,7 @@ use crate::{
     models::{
         AddAppRequest, AddAppsRequest, AddAppsResponse, AddCategoryRequest, AddGroupRequest,
         AppData, AppEXE, AppError, BatchAddFailure, Category, DeleteRequest, Group, IconType, Item,
-        MoveAppRequest, RenameRequest, RootItem, SetNodeCollapsedRequest,
+        MoveAppRequest, MoveGroupRequest, RenameRequest, RootItem, SetNodeCollapsedRequest,
     },
     path,
     state::AppState,
@@ -522,7 +522,6 @@ pub fn move_app(state: &AppState, request: MoveAppRequest) -> AppResult<()> {
 
         match &request.parent_id {
             None => match before_id {
-                // 参照的是某个顶层应用 → 插进它所在的那一行的对应位置。
                 Some(reference) => {
                     if tree::insert_into_root_row(data, reference, app) {
                         return Ok(());
@@ -537,10 +536,18 @@ pub fn move_app(state: &AppState, request: MoveAppRequest) -> AppResult<()> {
                     Ok(())
                 }
             },
-
             Some(parent_id) => match before_id {
                 Some(reference) => {
-                    if tree::insert_before_in_container(data, reference, app) {
+                    // 参照节点必须是目标容器的直接子项，避免跨容器错插。
+                    if tree::parent_of_node(data, reference).as_deref() != Some(parent_id.as_str())
+                    {
+                        return Err(AppError::new(
+                            "reference_not_found",
+                            format!("参照节点不在目标容器中: {reference}"),
+                        ));
+                    }
+                    if tree::insert_before_in_container(data, parent_id, reference, Item::App(app))
+                    {
                         Ok(())
                     } else {
                         Err(AppError::new(
@@ -557,6 +564,69 @@ pub fn move_app(state: &AppState, request: MoveAppRequest) -> AppResult<()> {
                     }
                 }
             },
+        }
+    })
+}
+
+// 仅在原父容器中重排分组，保留其完整子树和嵌套深度。
+pub fn move_group(state: &AppState, request: MoveGroupRequest) -> AppResult<()> {
+    validate_id(&request.id)?;
+    validate_id(&request.parent_id)?;
+    if let Some(before_id) = request.before_id.as_deref() {
+        validate_id(before_id)?;
+    }
+
+    let store = state.get_lock()?;
+    store.mutate_data(|data| {
+        let original_parent = tree::parent_of_node(data, &request.id)
+            .ok_or_else(|| not_found("group_not_found", "分组", &request.id))?;
+        if original_parent != request.parent_id {
+            return Err(AppError::new(
+                "invalid_group_parent",
+                "分组只能在当前父容器内重排",
+            ));
+        }
+
+        let Some(Item::Group(group)) = tree::remove_node(data, &request.id, tree::NodeKind::Group)
+        else {
+            return Err(not_found("group_not_found", "分组", &request.id));
+        };
+
+        if let Some(reference) = request.before_id.as_deref() {
+            if reference == request.id || tree::group_contains_id(&group, reference) {
+                return Err(AppError::new(
+                    "invalid_group_position",
+                    "分组不能移动到自身或后代之前",
+                ));
+            }
+            if tree::parent_of_node(data, reference).as_deref() != Some(request.parent_id.as_str())
+            {
+                return Err(AppError::new(
+                    "invalid_group_position",
+                    "参照节点必须与分组处于同一父容器",
+                ));
+            }
+            if tree::insert_before_in_container(
+                data,
+                &request.parent_id,
+                reference,
+                Item::Group(group),
+            ) {
+                Ok(())
+            } else {
+                Err(AppError::new(
+                    "reference_not_found",
+                    format!("找不到参照节点: {reference}"),
+                ))
+            }
+        } else if tree::append_child(data, &request.parent_id, Item::Group(group)) {
+            Ok(())
+        } else {
+            Err(not_found(
+                "parent_not_found",
+                "分组的父容器",
+                &request.parent_id,
+            ))
         }
     })
 }

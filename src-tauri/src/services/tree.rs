@@ -31,13 +31,45 @@ pub(crate) fn insert_into_root_row(data: &mut AppData, before_id: &str, app: App
     false
 }
 
-// 在分类或分组内部，插到参照节点之前。
-// 分组可以嵌套（最深 4 层），所以这里递归地找**直接持有**参照节点的那一层再插 ——
-// 参照节点在哪个分组里，就插进哪个分组，而不是一律塞到分类的顶层。
-pub(crate) fn insert_before_in_container(data: &mut AppData, before_id: &str, app: AppEXE) -> bool {
-    for item in data.items.iter_mut() {
-        if let RootItem::Category(category) = item {
-            if insert_before_recursive(&mut category.groups, before_id, app.clone()) {
+// 在指定分类或分组容器内，插到同级参照节点之前；节点类型可以是应用或分组。
+pub(crate) fn insert_before_in_container(
+    data: &mut AppData,
+    parent_id: &str,
+    before_id: &str,
+    node: Item,
+) -> bool {
+    if let Some(category) = data.items.iter_mut().find_map(|item| match item {
+        RootItem::Category(category) if category.id == parent_id => Some(category),
+        _ => None,
+    }) {
+        return insert_before_recursive(&mut category.groups, before_id, node);
+    }
+
+    if let Some(parent) = find_group_mut(data, parent_id) {
+        return insert_before_in_items(&mut parent.children, before_id, node);
+    }
+
+    false
+}
+
+fn insert_before_in_items(items: &mut Vec<Item>, before_id: &str, node: Item) -> bool {
+    if let Some(position) = items.iter().position(|item| item_id(item) == before_id) {
+        items.insert(position, node);
+        return true;
+    }
+
+    false
+}
+
+fn insert_before_recursive(items: &mut Vec<Item>, before_id: &str, node: Item) -> bool {
+    if let Some(position) = items.iter().position(|item| item_id(item) == before_id) {
+        items.insert(position, node);
+        return true;
+    }
+
+    for item in items.iter_mut() {
+        if let Item::Group(group) = item {
+            if insert_before_recursive(&mut group.children, before_id, node.clone()) {
                 return true;
             }
         }
@@ -46,24 +78,17 @@ pub(crate) fn insert_before_in_container(data: &mut AppData, before_id: &str, ap
     false
 }
 
-fn insert_before_recursive(items: &mut Vec<Item>, before_id: &str, app: AppEXE) -> bool {
-    if let Some(position) = items
-        .iter()
-        .position(|item| matches!(item, Item::App(one) if one.id == before_id))
-    {
-        items.insert(position, Item::App(app));
-        return true;
+fn item_id(item: &Item) -> &str {
+    match item {
+        Item::Group(group) => &group.id,
+        Item::App(app) => &app.id,
     }
+}
 
-    for item in items.iter_mut() {
-        if let Item::Group(group) = item {
-            if insert_before_recursive(&mut group.children, before_id, app.clone()) {
-                return true;
-            }
-        }
-    }
-
-    false
+pub(crate) fn group_contains_id(group: &Group, id: &str) -> bool {
+    group.children.iter().any(|item| {
+        item_id(item) == id || matches!(item, Item::Group(child) if group_contains_id(child, id))
+    })
 }
 
 // 追加到顶层末尾：末行是应用行就并入，否则新起一行。
@@ -195,6 +220,30 @@ pub(crate) fn find_app_mut<'a>(data: &'a mut AppData, id: &str) -> Option<&'a mu
 // 判断一个 ID 是否可以作为分类或分组的父节点。
 pub(crate) fn parent_exists(data: &AppData, id: &str) -> bool {
     find_category(data, id).is_some() || find_group(data, id).is_some()
+}
+
+/// 返回分类/分组树中指定应用或分组的直接父节点 ID。
+pub(crate) fn parent_of_node(data: &AppData, target_id: &str) -> Option<String> {
+    fn find_parent(items: &[Item], target_id: &str, parent_id: &str) -> Option<String> {
+        for item in items {
+            if item_id(item) == target_id {
+                return Some(parent_id.to_owned());
+            }
+            if let Item::Group(group) = item {
+                if let Some(parent) = find_parent(&group.children, target_id, &group.id) {
+                    return Some(parent);
+                }
+            }
+        }
+        None
+    }
+
+    for category in data.root_categories() {
+        if let Some(parent) = find_parent(&category.groups, target_id, &category.id) {
+            return Some(parent);
+        }
+    }
+    None
 }
 
 // 返回父节点所在的分组深度。

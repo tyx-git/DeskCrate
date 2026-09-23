@@ -21,6 +21,7 @@ export const COMMANDS = {
   addApp: 'add_app',
   addApps: 'add_apps',
   moveApp: 'move_app',
+  moveGroup: 'move_group',
   renameApp: 'rename_app',
   deleteApp: 'delete_app',
   launchIcon: 'launch_icon',

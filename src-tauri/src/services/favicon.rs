@@ -779,36 +779,41 @@ pub(crate) fn icon_candidates(html: &str, base: &str) -> Vec<Candidate> {
     candidates
 }
 
+/// 返回字符串开头的 Unicode 空白所占的 UTF-8 字节数。
+fn whitespace_prefix_bytes(value: &str) -> usize {
+    value
+        .char_indices()
+        .take_while(|(_, character)| character.is_whitespace())
+        .map(|(_, character)| character.len_utf8())
+        .sum()
+}
+
 /// 取 `name="value"` 里 value 在 `tag` 中的字节范围。
 fn attribute_span(tag: &str, name: &str) -> Option<(usize, usize)> {
-    let bytes = tag.as_bytes();
     let mut search = 0;
 
     loop {
         let offset = tag[search..].find(name)?;
         // 前面必须是空白或 `<`，否则会命中 `data-href` 这类名字里带 href 的属性。
         let at = search + offset;
-        let boundary_ok = at == 0 || matches!(bytes[at - 1], b' ' | b'\t' | b'\n' | b'\r' | b'<');
+        let boundary_ok = at == 0
+            || tag[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|character| character.is_whitespace() || character == '<');
         if !boundary_ok {
             search = at + name.len();
             continue;
         }
 
         let mut cursor = at + name.len();
-        cursor += tag[cursor..]
-            .chars()
-            .take_while(|c| c.is_whitespace())
-            .count();
+        cursor += whitespace_prefix_bytes(&tag[cursor..]);
         if tag.as_bytes().get(cursor) != Some(&b'=') {
             search = at + name.len();
             continue;
         }
         cursor += 1;
-        let skip = tag[cursor..]
-            .chars()
-            .take_while(|c| c.is_whitespace())
-            .count();
-        cursor += skip;
+        cursor += whitespace_prefix_bytes(&tag[cursor..]);
 
         let quote = *tag.as_bytes().get(cursor)?;
         let (value_start, value_end) = if quote == b'"' || quote == b'\'' {
@@ -946,6 +951,34 @@ mod tests {
         assert_eq!(
             urls_of(&candidates),
             vec!["https://a.com/docs/touch.png", "https://a.com/fav.png"]
+        );
+    }
+
+    #[test]
+    fn icon_candidates_handles_multibyte_whitespace_around_equals() {
+        let html = concat!(
+            "<link rel=\"icon\" href\u{3000}=\u{00a0}/wide.png>\n",
+            "<link rel=\"icon\" href=\u{3000}\"/full-width.png\">\n",
+            "<link rel=\"icon\" href=\u{00a0}/nbsp.png>"
+        );
+
+        assert_eq!(
+            urls_of(&icon_candidates(html, "https://a.com")),
+            vec![
+                "https://a.com/wide.png",
+                "https://a.com/full-width.png",
+                "https://a.com/nbsp.png",
+            ]
+        );
+    }
+
+    #[test]
+    fn icon_candidates_handles_multibyte_whitespace_before_attribute_names() {
+        let html = "<link\u{3000}rel=\"icon\"\u{00a0}href=\"/icon.png\">";
+
+        assert_eq!(
+            urls_of(&icon_candidates(html, "https://a.com")),
+            vec!["https://a.com/icon.png"]
         );
     }
 

@@ -21,10 +21,11 @@ export function CategorySection({ category, index }: CategorySectionProps) {
   const { activeDropId, toggleCollapse, contextMenuForNode, addAppTo } = useTreeActions()
   const data = useCatalogStore((state) => state.data)
   const moveApp = useCatalogStore((state) => state.moveApp)
-  const draggingAppId = useUiStore((state) => state.draggingAppId)
-  const setDraggingApp = useUiStore((state) => state.setDraggingApp)
+  const moveGroup = useCatalogStore((state) => state.moveGroup)
+  const draggingNode = useUiStore((state) => state.draggingNode)
+  const setDraggingNode = useUiStore((state) => state.setDraggingNode)
   const setDropHint = useUiStore((state) => state.setDropHint)
-  const drag = useAppDrag({ data, moveApp, setDraggingApp, setDropHint, draggingAppId })
+  const drag = useAppDrag({ data, moveApp, moveGroup, setDraggingNode, setDropHint, draggingNode })
 
   const location = {
     id: category.id,
@@ -38,15 +39,8 @@ export function CategorySection({ category, index }: CategorySectionProps) {
     // `--dc-i` 供收束动画做错峰：分类按顺序依次左收，形成「被抽走」的层次感。
     // 顶层区占用 0，分类从 1 起。
     <section
-      className={`dc-converge ${draggingAppId ? 'dc-drop-zone' : ''}`}
+      className={`dc-converge ${draggingNode?.kind === 'app' ? 'dc-drop-zone' : ''}`}
       style={{ '--dc-i': index + 1 } as CSSProperties}
-      // 把应用拖到分类行上 → 放进这个分类（追加到末尾）。
-      onDragOver={(event) => {
-        if (!draggingAppId) return
-        event.preventDefault()
-        event.dataTransfer.dropEffect = 'move'
-      }}
-      onDrop={(event) => drag.onDropOnContainer(event, category.id)}
     >
       <Row
         depth={0}
@@ -54,6 +48,12 @@ export function CategorySection({ category, index }: CategorySectionProps) {
         collapsed={category.isCollapsed}
         dropId={category.id}
         isDropTarget={activeDropId === category.id}
+        onDragOver={(event) => {
+          if (draggingNode?.kind !== 'app') return
+          event.preventDefault()
+          event.dataTransfer.dropEffect = 'move'
+        }}
+        onDrop={(event) => drag.onDropOnContainer(event, category.id)}
         onToggle={() => toggleCollapse(category.id, !category.isCollapsed)}
         onContextMenu={(event) => contextMenuForNode(event, location)}
         trailing={

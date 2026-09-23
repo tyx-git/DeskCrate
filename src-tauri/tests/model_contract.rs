@@ -1,6 +1,6 @@
 use app_lib::models::{
     AddAppRequest, AddCategoryRequest, AddGroupRequest, AppData, AppEXE, AppError, Category,
-    DeleteRequest, Group, IconType, Item, RenameRequest, RootItem,
+    DeleteRequest, Group, IconType, Item, MoveGroupRequest, RenameRequest, RootItem,
 };
 use serde_json::json;
 
@@ -75,6 +75,20 @@ fn all_icon_types_use_the_persisted_pascal_case_values() {
         let decoded: IconType = serde_json::from_str(&format!("\"{expected}\"")).unwrap();
         assert_eq!(decoded, icon_type);
     }
+}
+
+#[test]
+fn move_group_request_uses_camel_case_names() {
+    let request: MoveGroupRequest = serde_json::from_value(serde_json::json!({
+        "id": "group-id",
+        "parentId": "parent-id",
+        "beforeId": "sibling-id"
+    }))
+    .expect("camelCase request should deserialize");
+
+    assert_eq!(request.id, "group-id");
+    assert_eq!(request.parent_id, "parent-id");
+    assert_eq!(request.before_id.as_deref(), Some("sibling-id"));
 }
 
 #[test]

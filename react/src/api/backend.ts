@@ -63,6 +63,7 @@ export interface Backend {
     parentId: string | null,
     beforeId: string | null,
   ): Promise<void>
+  moveGroup(id: string, parentId: string, beforeId: string | null): Promise<void>
   renameApp(id: string, name: string): Promise<AppEXE>
   deleteApp(id: string): Promise<void>
   launchIcon(id: string): Promise<void>

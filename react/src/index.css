@@ -301,6 +301,26 @@ body.dc-resizing {
   right: -4px;
 }
 
+/* 分组行作为节点排序的目标时，用横线表达插入到它的前面或后面。 */
+.dc-drop-node-before::before,
+.dc-drop-node-after::after {
+  content: '';
+  position: absolute;
+  left: 4%;
+  right: 4%;
+  height: 2px;
+  border-radius: 1px;
+  background-color: var(--color-drop-active);
+}
+
+.dc-drop-node-before::before {
+  top: -2px;
+}
+
+.dc-drop-node-after::after {
+  bottom: -2px;
+}
+
 /* 拖拽期间给分类行一个可放置的底色，明确「松手会进这个分类」。 */
 .dc-drop-zone {
   background-color: rgb(58 96 190 / 0.08);

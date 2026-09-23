@@ -35,9 +35,11 @@ export interface Notice {
   message: string
 }
 
-/** 拖拽应用时的落点提示：放在哪个图标的前面 / 后面。 */
+export type DraggedNode = { id: string; kind: 'app' | 'group' }
+
+/** 节点拖拽时的落点提示：插到目标节点前面或后面。 */
 export interface DropHint {
-  appId: string
+  nodeId: string
   position: 'before' | 'after'
 }
 
@@ -50,8 +52,8 @@ interface UiState {
   dialog: DialogState | null
   notice: Notice | null
 
-  /** 正在被拖拽的应用 ID；没有拖拽时为 null。 */
-  draggingAppId: string | null
+  /** 当前被拖拽的应用或分组；没有拖拽时为 null。 */
+  draggingNode: DraggedNode | null
   /** 当前悬停的落点。 */
   dropHint: DropHint | null
   /**
@@ -70,7 +72,7 @@ interface UiState {
   closeDialog: () => void
   notify: (kind: Notice['kind'], message: string) => void
   dismissNotice: () => void
-  setDraggingApp: (id: string | null) => void
+  setDraggingNode: (node: DraggedNode | null) => void
   setDropHint: (hint: DropHint | null) => void
   setSettingsOpen: (open: boolean) => void
 }
@@ -84,7 +86,7 @@ export const useUiStore = create<UiState>((set) => ({
   contextMenu: null,
   dialog: null,
   notice: null,
-  draggingAppId: null,
+  draggingNode: null,
   dropHint: null,
   settingsOpen: false,
 
@@ -109,7 +111,7 @@ export const useUiStore = create<UiState>((set) => ({
     set({ notice: null })
   },
 
-  setDraggingApp: (draggingAppId) => set({ draggingAppId, dropHint: null }),
+  setDraggingNode: (draggingNode) => set({ draggingNode, dropHint: null }),
   setDropHint: (dropHint) => set({ dropHint }),
   // 打开设置页时顺手收掉右键菜单和对话框，避免两层浮层叠在一起。
   setSettingsOpen: (settingsOpen) =>

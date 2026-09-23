@@ -101,6 +101,8 @@ fn create_test_app(directory: &TestDir) -> tauri::App<tauri::test::MockRuntime> 
             commands::catalog::set_node_collapsed,
             add_app,
             add_apps,
+            commands::catalog::move_group,
+            commands::catalog::move_app,
             commands::catalog::rename_app,
             commands::catalog::delete_app,
             commands::settings::get_settings,
@@ -152,6 +154,22 @@ fn catalog_and_settings_commands_use_the_documented_ipc_shape() {
         json!({"parentId": category_id, "name": "编辑器"}),
     );
     let group_id = group["id"].as_str().unwrap().to_owned();
+    let sibling = invoke(
+        &window,
+        "add_group",
+        json!({"parentId": category_id, "name": "另一个分组"}),
+    );
+    let sibling_id = sibling["id"].as_str().unwrap().to_owned();
+    invoke(
+        &window,
+        "move_group",
+        json!({"id": sibling_id, "parentId": category_id, "beforeId": group_id}),
+    );
+    let reordered = invoke(&window, "get_all_data", json!({}));
+    assert_eq!(
+        reordered["items"][0]["Category"]["groups"][0]["Group"]["id"],
+        sibling_id
+    );
 
     invoke(
         &window,
@@ -168,7 +186,7 @@ fn catalog_and_settings_commands_use_the_documented_ipc_shape() {
     );
     let collapsed = invoke(&window, "get_all_data", json!({}));
     assert_eq!(
-        collapsed["items"][0]["Category"]["groups"][0]["Group"]["isCollapsed"],
+        collapsed["items"][0]["Category"]["groups"][1]["Group"]["isCollapsed"],
         true
     );
 

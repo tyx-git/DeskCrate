@@ -4,8 +4,8 @@ use crate::{
     error::AppResult,
     models::{
         AddAppRequest, AddAppsRequest, AddAppsResponse, AddCategoryRequest, AddGroupRequest,
-        AppData, AppEXE, Category, DeleteRequest, Group, MoveAppRequest, RenameRequest,
-        SetNodeCollapsedRequest,
+        AppData, AppEXE, Category, DeleteRequest, Group, MoveAppRequest, MoveGroupRequest,
+        RenameRequest, SetNodeCollapsedRequest,
     },
     services,
     state::AppState,
@@ -189,6 +189,23 @@ pub fn move_app(
     services::catalog::move_app(
         state.inner(),
         MoveAppRequest {
+            id,
+            parent_id,
+            before_id,
+        },
+    )
+}
+
+#[tauri::command]
+pub fn move_group(
+    id: String,
+    parent_id: String,
+    before_id: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> AppResult<()> {
+    services::catalog::move_group(
+        state.inner(),
+        MoveGroupRequest {
             id,
             parent_id,
             before_id,

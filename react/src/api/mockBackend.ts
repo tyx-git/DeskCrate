@@ -17,6 +17,7 @@ import {
   removeCategory as removeCategoryData,
   insertApp as insertAppData,
   moveApp as moveAppData,
+  moveGroup as moveGroupData,
   removeApp as removeAppData,
   removeGroup as removeGroupData,
   renameApp as renameAppData,
@@ -505,6 +506,23 @@ class MockBackend implements Backend {
         app_not_found: `找不到应用: ${id}`,
         parent_not_found: `找不到目标容器: ${parentId}`,
         reference_not_found: `找不到参照节点: ${beforeId}`,
+      }
+      throw { code: result.code, message: messages[result.code] }
+    }
+    this.data = result.data
+    this.persistData()
+  }
+
+  async moveGroup(id: string, parentId: string, beforeId: string | null): Promise<void> {
+    await delay()
+    const result = moveGroupData(this.data, id, parentId, beforeId)
+    if (!result.ok) {
+      const messages = {
+        group_not_found: `找不到分组: ${id}`,
+        parent_not_found: `找不到分组父容器: ${parentId}`,
+        reference_not_found: `找不到参照节点: ${beforeId}`,
+        invalid_group_parent: '分组只能在当前父容器内重排',
+        invalid_group_position: '分组只能在同级中移动，且不能放入自身或后代',
       }
       throw { code: result.code, message: messages[result.code] }
     }

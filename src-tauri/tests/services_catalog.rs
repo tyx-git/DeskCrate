@@ -5,7 +5,7 @@ use std::fs;
 use app_lib::{
     models::{
         AddAppRequest, AddCategoryRequest, AddGroupRequest, AppData, AppEXE, Category,
-        DeleteRequest, IconType, Item, MoveAppRequest, RenameRequest, RootItem,
+        DeleteRequest, IconType, Item, MoveAppRequest, MoveGroupRequest, RenameRequest, RootItem,
     },
     services::catalog,
     state::AppState,
@@ -766,6 +766,28 @@ fn reordering_inside_one_container_compensates_for_the_removal_shift() {
         names(&data),
         vec!["三".to_owned(), "二".to_owned(), "一".to_owned()]
     );
+
+    let group = catalog::add_group(
+        &state,
+        AddGroupRequest {
+            parent_id: category.id.clone(),
+            name: "夹在应用间的分组".to_owned(),
+        },
+    )
+    .unwrap();
+    catalog::move_app(
+        &state,
+        MoveAppRequest {
+            id: ids[0].clone(),
+            parent_id: Some(category.id.clone()),
+            before_id: Some(group.id.clone()),
+        },
+    )
+    .expect("应用可以插到同级分组之前");
+    let data = catalog::get_all_data(&state).unwrap();
+    let siblings = &find_category(&data, &category.id).unwrap().groups;
+    assert!(matches!(&siblings[2], Item::App(app) if app.id == ids[0]));
+    assert!(matches!(&siblings[3], Item::Group(candidate) if candidate.id == group.id));
 }
 
 #[test]
@@ -811,6 +833,188 @@ fn an_app_can_be_reordered_within_one_top_level_row() {
     )
     .expect("move should succeed");
     assert_eq!(order(), vec!["绿", "红", "蓝"]);
+}
+
+#[test]
+fn groups_can_be_reordered_among_mixed_siblings_without_losing_their_subtree() {
+    let directory = TestDir::new("move-group-siblings");
+    let state = directory.state();
+    let category = catalog::add_category(
+        &state,
+        AddCategoryRequest {
+            name: "工具".into(),
+        },
+    )
+    .unwrap();
+    let first = catalog::add_group(
+        &state,
+        AddGroupRequest {
+            parent_id: category.id.clone(),
+            name: "第一组".into(),
+        },
+    )
+    .unwrap();
+    let middle_app = catalog::add_app(
+        &state,
+        AddAppRequest {
+            parent_id: Some(category.id.clone()),
+            source_path: "https://example.com/app".into(),
+            name: Some("中间应用".into()),
+            root_index: None,
+        },
+    )
+    .unwrap();
+    let second = catalog::add_group(
+        &state,
+        AddGroupRequest {
+            parent_id: category.id.clone(),
+            name: "第二组".into(),
+        },
+    )
+    .unwrap();
+    let child = catalog::add_group(
+        &state,
+        AddGroupRequest {
+            parent_id: first.id.clone(),
+            name: "子分组".into(),
+        },
+    )
+    .unwrap();
+
+    catalog::move_group(
+        &state,
+        MoveGroupRequest {
+            id: second.id.clone(),
+            parent_id: category.id.clone(),
+            before_id: Some(middle_app.id.clone()),
+        },
+    )
+    .unwrap();
+
+    let data = catalog::get_all_data(&state).unwrap();
+    let groups = &find_category(&data, &category.id).unwrap().groups;
+    let ids: Vec<&str> = groups
+        .iter()
+        .map(|item| match item {
+            Item::App(app) => app.id.as_str(),
+            Item::Group(group) => group.id.as_str(),
+        })
+        .collect();
+    assert_eq!(
+        ids,
+        vec![
+            first.id.as_str(),
+            second.id.as_str(),
+            middle_app.id.as_str()
+        ]
+    );
+    assert_eq!(
+        find_group(&data, &child.id).unwrap().name,
+        "子分组",
+        "分组子树应整体保留"
+    );
+
+    catalog::move_group(
+        &state,
+        MoveGroupRequest {
+            id: first.id.clone(),
+            parent_id: category.id.clone(),
+            before_id: None,
+        },
+    )
+    .unwrap();
+    let data = catalog::get_all_data(&state).unwrap();
+    let groups = &find_category(&data, &category.id).unwrap().groups;
+    assert!(matches!(&groups[2], Item::Group(group) if group.id == first.id));
+    assert!(find_group(&data, &child.id).is_some());
+}
+
+#[test]
+fn moving_a_group_into_its_descendant_is_rejected_without_persisting() {
+    let directory = TestDir::new("move-group-descendant");
+    let state = directory.state();
+    let category = catalog::add_category(
+        &state,
+        AddCategoryRequest {
+            name: "工具".into(),
+        },
+    )
+    .unwrap();
+    let parent = catalog::add_group(
+        &state,
+        AddGroupRequest {
+            parent_id: category.id.clone(),
+            name: "父组".into(),
+        },
+    )
+    .unwrap();
+    let child = catalog::add_group(
+        &state,
+        AddGroupRequest {
+            parent_id: parent.id.clone(),
+            name: "子组".into(),
+        },
+    )
+    .unwrap();
+
+    let error = catalog::move_group(
+        &state,
+        MoveGroupRequest {
+            id: parent.id.clone(),
+            parent_id: category.id.clone(),
+            before_id: Some(child.id.clone()),
+        },
+    )
+    .expect_err("不能把分组移到其子孙节点之前");
+    assert_eq!(error.code, "invalid_group_position");
+    let data = catalog::get_all_data(&state).unwrap();
+    assert!(find_group(&data, &parent.id).is_some());
+    assert!(find_group(&data, &child.id).is_some());
+}
+
+#[test]
+fn moving_a_group_across_parent_containers_is_rejected() {
+    let directory = TestDir::new("move-group-cross-parent");
+    let state = directory.state();
+    let category = catalog::add_category(
+        &state,
+        AddCategoryRequest {
+            name: "工具".into(),
+        },
+    )
+    .unwrap();
+    let other_category = catalog::add_category(
+        &state,
+        AddCategoryRequest {
+            name: "其他".into(),
+        },
+    )
+    .unwrap();
+    let group = catalog::add_group(
+        &state,
+        AddGroupRequest {
+            parent_id: category.id.clone(),
+            name: "分组".into(),
+        },
+    )
+    .unwrap();
+
+    let error = catalog::move_group(
+        &state,
+        MoveGroupRequest {
+            id: group.id.clone(),
+            parent_id: other_category.id,
+            before_id: None,
+        },
+    )
+    .expect_err("本接口仅允许同级排序");
+    assert_eq!(error.code, "invalid_group_parent");
+    assert_eq!(
+        find_group(&catalog::get_all_data(&state).unwrap(), &group.id)
+            .unwrap()
+            .name,
+        "分组"
+    );
 }
 
 #[test]

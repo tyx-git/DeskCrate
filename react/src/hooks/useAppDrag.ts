@@ -1,37 +1,36 @@
 import { useCallback } from 'react'
 
 import { asAppsRoot, asCategoryRoot } from '../lib/tree'
-import type { AppData, AppEXE, Item, RootItem } from '../types/catalog'
+import type { AppData, AppEXE, Group, Item, RootItem } from '../types/catalog'
+import type { DraggedNode, DropHint } from '../state/uiStore'
 
-/**
- * 一个应用在树里的位置：父容器（`null` = 顶层）与同一层的兄弟顺序。
- *
- * 兄弟顺序用来把「插到 X 之后」翻译成「插到 X 的下一个兄弟之前」—— 后端只认
- * 参照节点，不认下标。
- */
 interface Placement {
   parentId: string | null
   siblingIds: string[]
 }
 
-function findPlacement(items: RootItem[], appId: string): Placement | null {
-  for (const root of items) {
-    const apps = asAppsRoot(root)
-    if (apps?.some((app) => app.id === appId)) {
-      return { parentId: null, siblingIds: apps.map((app) => app.id) }
+function findPlacement(items: RootItem[], node: DraggedNode): Placement | null {
+  if (node.kind === 'app') {
+    for (const root of items) {
+      const apps = asAppsRoot(root)
+      if (apps?.some((app) => app.id === node.id)) {
+        return { parentId: null, siblingIds: apps.map((app) => app.id) }
+      }
     }
   }
 
   const walk = (entries: readonly Item[], parentId: string): Placement | null => {
     for (const entry of entries) {
-      if ('App' in entry) {
-        if (entry.App.id === appId) {
+      if (node.kind === 'app' && 'App' in entry && entry.App.id === node.id) {
+        return { parentId, siblingIds: siblingIdsOf(entries) }
+      }
+      if ('Group' in entry) {
+        if (node.kind === 'group' && entry.Group.id === node.id) {
           return { parentId, siblingIds: siblingIdsOf(entries) }
         }
-        continue
+        const found = walk(entry.Group.children, entry.Group.id)
+        if (found) return found
       }
-      const found = walk(entry.Group.children, entry.Group.id)
-      if (found) return found
     }
     return null
   }
@@ -42,96 +41,137 @@ function findPlacement(items: RootItem[], appId: string): Placement | null {
     const found = walk(category.groups, category.id)
     if (found) return found
   }
-
   return null
 }
 
-/** 取一层节点里所有兄弟的 ID（应用与分组混排时按显示顺序）。 */
 function siblingIdsOf(entries: readonly Item[]): string[] {
   return entries.map((entry) => ('App' in entry ? entry.App.id : entry.Group.id))
 }
 
-/**
- * 应用图标的拖拽换位。
- *
- * 规则：**拖到某个图标的左半 → 插到它前面；右半 → 插到它后面。**
- *
- * 目标位置一律用「参照节点」表达（插到参照之前），有两个原因：顶层应用是按**行**
- * 存放的，一个下标表达不了「第几行的第几个」；而且先摘后插会让下标整体左移，用
- * 下标很容易算偏一位。
- *
- * 「插到 X 后面」在 X 是最后一个时退化成「追加到末尾」（`beforeId = null`）。
- */
+function groupContains(group: Group, id: string): boolean {
+  return group.children.some(
+    (entry) =>
+      ('App' in entry ? entry.App.id : entry.Group.id) === id ||
+      ('Group' in entry && groupContains(entry.Group, id)),
+  )
+}
+
 export function useAppDrag(deps: {
   data: AppData
-  // store 的 action 会顺带返回成功与否，这里不关心返回值。
   moveApp: (id: string, parentId: string | null, beforeId: string | null) => Promise<unknown>
-  setDraggingApp: (id: string | null) => void
-  setDropHint: (hint: { appId: string; position: 'before' | 'after' } | null) => void
-  draggingAppId: string | null
+  moveGroup: (id: string, parentId: string, beforeId: string | null) => Promise<unknown>
+  setDraggingNode: (node: DraggedNode | null) => void
+  setDropHint: (hint: DropHint | null) => void
+  draggingNode: DraggedNode | null
 }) {
-  const { data, moveApp, setDraggingApp, setDropHint, draggingAppId } = deps
+  const { data, moveApp, moveGroup, setDraggingNode, setDropHint, draggingNode } = deps
 
-  const onDragStart = useCallback(
+  const onDragStartApp = useCallback(
     (event: React.DragEvent<HTMLElement>, app: AppEXE) => {
-      // 只用于内部换位，别让系统文件拖放掺和进来。
       event.dataTransfer.effectAllowed = 'move'
       event.dataTransfer.setData('text/plain', app.id)
-      setDraggingApp(app.id)
+      setDraggingNode({ id: app.id, kind: 'app' })
     },
-    [setDraggingApp],
+    [setDraggingNode],
   )
 
-  const onDragOverIcon = useCallback(
-    (event: React.DragEvent<HTMLElement>, target: AppEXE) => {
-      if (!draggingAppId || draggingAppId === target.id) return
-      // 必须阻止默认行为，否则浏览器不会派发 drop。
+  const onDragStartGroup = useCallback(
+    (event: React.DragEvent<HTMLElement>, group: Group) => {
+      event.dataTransfer.effectAllowed = 'move'
+      event.dataTransfer.setData('text/plain', group.id)
+      setDraggingNode({ id: group.id, kind: 'group' })
+    },
+    [setDraggingNode],
+  )
+
+  const onDragOverNode = useCallback(
+    (event: React.DragEvent<HTMLElement>, target: DraggedNode, axis: 'x' | 'y' = 'x') => {
+      if (!draggingNode || (draggingNode.id === target.id && draggingNode.kind === target.kind)) return
       event.preventDefault()
+      event.stopPropagation()
       event.dataTransfer.dropEffect = 'move'
-
       const box = event.currentTarget.getBoundingClientRect()
-      const after = event.clientX > box.left + box.width / 2
-      setDropHint({ appId: target.id, position: after ? 'after' : 'before' })
+      const after = axis === 'x'
+        ? event.clientX > box.left + box.width / 2
+        : event.clientY > box.top + box.height / 2
+      setDropHint({ nodeId: target.id, position: after ? 'after' : 'before' })
     },
-    [draggingAppId, setDropHint],
+    [draggingNode, setDropHint],
   )
 
-  const onDropOnIcon = useCallback(
-    (event: React.DragEvent<HTMLElement>, target: AppEXE) => {
+  const onDropOnNode = useCallback(
+    (event: React.DragEvent<HTMLElement>, target: DraggedNode, axis: 'x' | 'y' = 'x') => {
       event.preventDefault()
+      event.stopPropagation()
+      const dragged = draggingNode
       setDropHint(null)
-      setDraggingApp(null)
-      if (!draggingAppId || draggingAppId === target.id) return
+      setDraggingNode(null)
+      if (!dragged || (dragged.id === target.id && dragged.kind === target.kind)) return
+
+      const targetPlacement = findPlacement(data.items, target)
+      const sourcePlacement = findPlacement(data.items, dragged)
+      if (!targetPlacement || !sourcePlacement || sourcePlacement.parentId !== targetPlacement.parentId) return
+
+      if (dragged.kind === 'group') {
+        const source = findGroup(data.items, dragged.id)
+        if (!source || groupContains(source, target.id)) return
+      }
 
       const box = event.currentTarget.getBoundingClientRect()
-      const after = event.clientX > box.left + box.width / 2
+      const after = axis === 'x'
+        ? event.clientX > box.left + box.width / 2
+        : event.clientY > box.top + box.height / 2
+      const at = targetPlacement.siblingIds.indexOf(target.id)
+      const beforeId = after ? (targetPlacement.siblingIds[at + 1] ?? null) : target.id
+      if (beforeId === dragged.id) return
 
-      const placement = findPlacement(data.items, target.id)
-      if (!placement) return
-
-      const at = placement.siblingIds.indexOf(target.id)
-      const beforeId = after ? (placement.siblingIds[at + 1] ?? null) : target.id
-      void moveApp(draggingAppId, placement.parentId, beforeId)
+      if (dragged.kind === 'app') {
+        void moveApp(dragged.id, targetPlacement.parentId, beforeId)
+      } else if (targetPlacement.parentId !== null) {
+        void moveGroup(dragged.id, targetPlacement.parentId, beforeId)
+      }
     },
-    [data.items, draggingAppId, moveApp, setDraggingApp, setDropHint],
+    [data.items, draggingNode, moveApp, moveGroup, setDraggingNode, setDropHint],
   )
 
-  /** 松手在容器空白处（不在任何图标上）→ 追加到该容器末尾。 */
   const onDropOnContainer = useCallback(
     (event: React.DragEvent<HTMLElement>, parentId: string | null) => {
       event.preventDefault()
+      event.stopPropagation()
+      const dragged = draggingNode
       setDropHint(null)
-      setDraggingApp(null)
-      if (!draggingAppId) return
-      void moveApp(draggingAppId, parentId, null)
+      setDraggingNode(null)
+      if (!dragged || dragged.kind !== 'app') return
+      void moveApp(dragged.id, parentId, null)
     },
-    [draggingAppId, moveApp, setDraggingApp, setDropHint],
+    [draggingNode, moveApp, setDraggingNode, setDropHint],
   )
 
   const onDragEnd = useCallback(() => {
     setDropHint(null)
-    setDraggingApp(null)
-  }, [setDraggingApp, setDropHint])
+    setDraggingNode(null)
+  }, [setDraggingNode, setDropHint])
 
-  return { onDragStart, onDragOverIcon, onDropOnIcon, onDropOnContainer, onDragEnd }
+  return { onDragStartApp, onDragStartGroup, onDragOverNode, onDropOnNode, onDropOnContainer, onDragEnd }
+}
+
+function findGroup(items: RootItem[], id: string): Group | null {
+  const walk = (entries: readonly Item[]): Group | null => {
+    for (const entry of entries) {
+      if ('Group' in entry) {
+        if (entry.Group.id === id) return entry.Group
+        const nested = walk(entry.Group.children)
+        if (nested) return nested
+      }
+    }
+    return null
+  }
+  for (const root of items) {
+    const category = asCategoryRoot(root)
+    if (category) {
+      const found = walk(category.groups)
+      if (found) return found
+    }
+  }
+  return null
 }
