@@ -2,7 +2,7 @@ mod support;
 
 use std::fs;
 
-use app_lib::{
+use lib::{
     models::{AddAppRequest, AddCategoryRequest, IconType},
     services::catalog,
 };

@@ -11,8 +11,8 @@ mod support;
 
 use std::fs;
 
-use app_lib::models::{AddAppRequest, IconType};
-use app_lib::services::catalog;
+use lib::models::{AddAppRequest, IconType};
+use lib::services::catalog;
 
 use support::TestDir;
 

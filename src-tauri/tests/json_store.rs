@@ -2,7 +2,7 @@ mod support;
 
 use std::{env, fs, path::PathBuf, process::Command};
 
-use app_lib::{
+use lib::{
     error::AppResult,
     models::{AppData, AppError, Category, RootItem, Settings, ViewMode},
     storage::{DataRepository, JsonStore, SettingsRepository},

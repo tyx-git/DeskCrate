@@ -494,14 +494,7 @@ fn reusable_url_icon(data: &AppData, url: &str) -> Option<String> {
 // 端口要带上：`localhost:3000` 和 `localhost:5173` 是两个站点。host 统一小写，
 // 免得 `GitHub.com` 和 `github.com` 被当成两个源。
 fn url_origin(url: &str) -> Option<String> {
-    let parts = favicon::split_url(url)?;
-    let scheme = if parts.is_https { "https" } else { "http" };
-
-    Some(format!(
-        "{scheme}://{}:{}",
-        parts.host.to_ascii_lowercase(),
-        parts.port
-    ))
+    favicon::parse_http_origin(url)
 }
 
 // 把一个应用移动到新位置（拖拽换位）。

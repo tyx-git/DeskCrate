@@ -17,8 +17,10 @@ use windows::core::PCWSTR;
 use windows::Win32::Networking::WinHttp::{
     WinHttpCloseHandle, WinHttpConnect, WinHttpOpen, WinHttpOpenRequest, WinHttpQueryDataAvailable,
     WinHttpQueryHeaders, WinHttpReadData, WinHttpReceiveResponse, WinHttpSendRequest,
-    WinHttpSetTimeouts, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_FLAG_SECURE,
-    WINHTTP_OPEN_REQUEST_FLAGS, WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_STATUS_CODE,
+    WinHttpSetOption, WinHttpSetTimeouts, ERROR_WINHTTP_HEADER_NOT_FOUND,
+    WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_DISABLE_REDIRECTS, WINHTTP_FLAG_SECURE,
+    WINHTTP_OPEN_REQUEST_FLAGS, WINHTTP_OPTION_DISABLE_FEATURE, WINHTTP_QUERY_FLAG_NUMBER,
+    WINHTTP_QUERY_LOCATION, WINHTTP_QUERY_STATUS_CODE,
 };
 
 use crate::{
@@ -49,22 +51,20 @@ const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/
 pub(crate) struct HttpResponse {
     /// HTTP 状态码。
     pub status: u32,
+    /// 手动处理重定向时使用的 Location 响应头。
+    pub location: Option<String>,
     /// 响应体，长度不超过调用方给定的上限。
     pub body: Vec<u8>,
 }
 
 /// 发起一个 GET 请求，最多读 `max_bytes` 字节。
 ///
-/// `timeout_ms` 分别套在解析、连接、发送和接收上。任一步失败都返回错误，
-/// 调用方据此决定是换个候选地址还是放弃。
-pub(crate) fn get(
-    url: &UrlParts<'_>,
-    max_bytes: usize,
-    timeout_ms: i32,
-) -> AppResult<HttpResponse> {
+/// 自动重定向被禁用；调用方必须先校验 `Location` 才能发出下一跳请求。
+/// `timeout_ms` 分别套在解析、连接、发送和接收上。
+pub(crate) fn get(url: &UrlParts, max_bytes: usize, timeout_ms: i32) -> AppResult<HttpResponse> {
     let agent = wide::to_wide(USER_AGENT);
-    let server = wide::to_wide(url.host);
-    let path = wide::to_wide(url.path_and_query);
+    let server = wide::to_wide(&url.host);
+    let path = wide::to_wide(&url.path_and_query);
     let method = wide::to_wide("GET");
 
     unsafe {
@@ -109,25 +109,101 @@ pub(crate) fn get(
         )
         .map_err(|error| support::windows_error("http_timeout_failed", error))?;
 
+        // 必须在收到响应前关闭 WinHTTP 自动重定向，否则每一跳都绕开 URL 策略校验。
+        let redirect_policy = WINHTTP_DISABLE_REDIRECTS.to_ne_bytes();
+        WinHttpSetOption(
+            Some(request.get()),
+            WINHTTP_OPTION_DISABLE_FEATURE,
+            Some(&redirect_policy),
+        )
+        .map_err(|error| support::windows_error("http_redirect_policy_failed", error))?;
+
         WinHttpSendRequest(request.get(), None, None, 0, 0, 0)
             .map_err(|error| support::windows_error("http_send_failed", error))?;
         WinHttpReceiveResponse(request.get(), std::ptr::null_mut())
             .map_err(|error| support::windows_error("http_receive_failed", error))?;
 
         let status = query_status(request.get())?;
-        let body = read_body(request.get(), max_bytes)?;
+        let location = if is_redirect(status) {
+            query_text_header(request.get(), WINHTTP_QUERY_LOCATION)?
+        } else {
+            None
+        };
+        let body = if location.is_some() {
+            Vec::new()
+        } else {
+            read_body(request.get(), max_bytes)?
+        };
 
-        Ok(HttpResponse { status, body })
+        Ok(HttpResponse {
+            status,
+            location,
+            body,
+        })
     }
 }
 
 /// 拆好的 URL：WinHTTP 的 `WinHttpConnect` / `WinHttpOpenRequest` 要分开传
 /// 主机名和路径，所以调用方先拆好。
-pub(crate) struct UrlParts<'a> {
-    pub host: &'a str,
+pub(crate) struct UrlParts {
+    pub host: String,
     pub port: u16,
-    pub path_and_query: &'a str,
+    pub path_and_query: String,
     pub is_https: bool,
+}
+
+/// 判断是否为 HTTP 重定向响应。
+fn is_redirect(status: u32) -> bool {
+    matches!(status, 301 | 302 | 303 | 307 | 308)
+}
+
+/// 读取文本响应头。
+unsafe fn query_text_header(request: *mut c_void, name: u32) -> AppResult<Option<String>> {
+    let mut length = 0;
+    let query_name = PCWSTR::null();
+    let query = unsafe {
+        WinHttpQueryHeaders(
+            request,
+            name,
+            query_name,
+            None,
+            &mut length,
+            std::ptr::null_mut(),
+        )
+    };
+    if let Err(error) = query {
+        // WinHTTP reports an absent response header directly as HEADER_NOT_FOUND.
+        if error.code().0 as u32 == ((7 << 16) | 0x8000_0000 | ERROR_WINHTTP_HEADER_NOT_FOUND) {
+            return Ok(None);
+        }
+        // A size-probe is expected to fail with ERROR_INSUFFICIENT_BUFFER. Any other
+        // failure is real and must not be mistaken for an empty header.
+        if error.code().0 as u32 != ((7 << 16) | 0x8000_0000 | 122) {
+            return Err(support::windows_error("http_header_failed", error));
+        }
+    }
+
+    if length == 0 || length % 2 != 0 {
+        return Ok(None);
+    }
+    let mut buffer = vec![0u16; (length as usize / size_of::<u16>()).saturating_add(1)];
+    unsafe {
+        WinHttpQueryHeaders(
+            request,
+            name,
+            PCWSTR::null(),
+            Some(buffer.as_mut_ptr().cast::<c_void>()),
+            &mut length,
+            std::ptr::null_mut(),
+        )
+        .map_err(|error| support::windows_error("http_header_failed", error))?;
+    }
+    if buffer.last() == Some(&0) {
+        buffer.pop();
+    }
+    let value = String::from_utf16(&buffer)
+        .map_err(|_| AppError::new("http_header_invalid", "响应头不是有效的 UTF-16"))?;
+    Ok(Some(value))
 }
 
 /// 读状态码。带 `WINHTTP_QUERY_FLAG_NUMBER` 时缓冲区是一个 `u32`。

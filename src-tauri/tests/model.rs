@@ -1,6 +1,4 @@
-use app_lib::models::{
-    CssSize, Settings, Theme, ViewMode, WindowPosition, WindowSettings, WindowSize,
-};
+use lib::models::{CssSize, Settings, Theme, ViewMode, WindowPosition, WindowSettings, WindowSize};
 use serde_json::json;
 
 #[test]

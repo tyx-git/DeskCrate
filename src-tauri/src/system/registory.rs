@@ -3,7 +3,7 @@
 // Windows 的自启动不靠「配置里写个开关」，而是往当前用户的 Run 键里塞一条：
 //
 //     HKCU\Software\Microsoft\Windows\CurrentVersion\Run
-//         DeskCrate = "C:\...\app.exe"
+//         DeskCrate = "C:\...\deskcrate.exe"
 //
 // 选 `HKCU` 而不是 `HKLM`：后者需要管理员权限，而侧栏这类常驻小程序没有必要
 // 为了开机启动去要 UAC。代价是自启动只对当前用户生效 —— 这正好是期望行为。

@@ -2,7 +2,7 @@ mod support;
 
 use std::fs;
 
-use app_lib::{
+use lib::{
     models::{
         AddAppRequest, AddCategoryRequest, AddGroupRequest, AppData, AppEXE, Category,
         DeleteRequest, IconType, Item, MoveAppRequest, MoveGroupRequest, RenameRequest, RootItem,
@@ -734,7 +734,7 @@ fn reordering_inside_one_container_compensates_for_the_removal_shift() {
     )
     .expect("move should succeed");
 
-    let names = |data: &app_lib::models::AppData| {
+    let names = |data: &lib::models::AppData| {
         data.root_categories()
             .flat_map(|c| c.groups.iter())
             .filter_map(|item| match item {

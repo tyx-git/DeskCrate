@@ -8,7 +8,7 @@ use tauri::{
     WebviewWindowBuilder,
 };
 
-use app_lib::{
+use lib::{
     commands,
     error::AppResult,
     models::{
@@ -259,7 +259,7 @@ fn field_level_settings_commands_preserve_unrelated_configuration() {
         width: 640,
         height: 480,
     });
-    initial.window.size_override = Some(app_lib::models::CssSize {
+    initial.window.size_override = Some(lib::models::CssSize {
         width: 420,
         height: 600,
     });
@@ -383,7 +383,7 @@ fn window_command_restores_and_persists_window_state() {
     assert_eq!(restored["size"], json!({"width": 640, "height": 480}));
 
     let state = directory.state();
-    app_lib::services::window::persist_window_state(&state, &window)
+    lib::services::window::persist_window_state(&state, &window)
         .expect("mock window state should persist");
 
     let persisted = directory

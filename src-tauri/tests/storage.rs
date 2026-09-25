@@ -2,7 +2,7 @@ mod support;
 
 use std::fs;
 
-use app_lib::{
+use lib::{
     models::{Settings, WindowPosition, WindowSize},
     storage::SettingsRepository,
 };
@@ -50,14 +50,14 @@ fn config_round_trip_keeps_negative_multi_monitor_coordinates() {
 fn settings_service_rejects_invalid_window_state_without_overwriting_config() {
     let directory = TestDir::new("invalid-settings");
     let state = directory.state();
-    let original = app_lib::services::settings::get_settings(&state).unwrap();
+    let original = lib::services::settings::get_settings(&state).unwrap();
 
     let mut invalid_size = original.clone();
     invalid_size.window.size = Some(WindowSize {
         width: 0,
         height: 480,
     });
-    let error = app_lib::services::settings::update_settings(&state, invalid_size)
+    let error = lib::services::settings::update_settings(&state, invalid_size)
         .expect_err("zero window width should be rejected");
     assert_eq!(error.code, "invalid_window_size");
 
@@ -67,12 +67,12 @@ fn settings_service_rejects_invalid_window_state_without_overwriting_config() {
         width: 640,
         height: 480,
     });
-    let error = app_lib::services::settings::update_settings(&state, invalid_state)
+    let error = lib::services::settings::update_settings(&state, invalid_state)
         .expect_err("initialized settings without position should be rejected");
     assert_eq!(error.code, "invalid_window_state");
 
     assert_eq!(
-        app_lib::services::settings::get_settings(&state).unwrap(),
+        lib::services::settings::get_settings(&state).unwrap(),
         original
     );
 }

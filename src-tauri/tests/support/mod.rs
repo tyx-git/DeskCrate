@@ -6,7 +6,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use app_lib::{
+use lib::{
     models::{AppData, AppEXE, Category, Group, Item},
     state::AppState,
     storage::JsonStore,

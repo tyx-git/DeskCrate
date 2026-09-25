@@ -14,15 +14,11 @@
 // URL 相关的几个函数（`split_url` / `resolve_reference` / `icon_candidates`）
 // 都是不碰网络、不碰 Windows API 的纯函数，测试层可以直接覆盖。
 
-use base64::Engine;
 use image::imageops::{self, FilterType};
 use image::RgbaImage;
+use url::{Host, Url};
 
-use crate::{
-    error::AppResult,
-    models::AppError,
-    system::http::{self, UrlParts},
-};
+use crate::{error::AppResult, models::AppError, system::http};
 
 // 一次抓取的预算。
 //
@@ -44,6 +40,7 @@ const TOTAL_BUDGET_MS: u128 = 8000;
 // 最多尝试几个候选地址。站点可能声明一堆不同尺寸的图标，逐个试下去会把
 // 「添加一个网址」拖成好几秒的等待。
 const MAX_CANDIDATES: usize = 3;
+const MAX_REDIRECTS: usize = 5;
 
 // 图标缩放后的最长边。256px 为高 DPI 侧栏保留足够的采样余量。
 const ICON_MAX_EDGE: u32 = 256;
@@ -61,6 +58,17 @@ pub(crate) enum FetchedIcon {
 }
 
 /// 抓取 `url` 的站点图标。
+pub(crate) fn parse_http_origin(url: &str) -> Option<String> {
+    let parsed = parse_http_url(url).ok()?;
+    let host = match parsed.host()? {
+        Host::Domain(host) => host.to_ascii_lowercase(),
+        Host::Ipv4(host) => host.to_string(),
+        Host::Ipv6(host) => format!("[{host}]"),
+    };
+    let port = parsed.port_or_known_default()?;
+    Some(format!("{}://{host}:{port}", parsed.scheme()))
+}
+
 pub(crate) fn fetch_icon(url: &str) -> AppResult<FetchedIcon> {
     fetch_icon_into(url, &mut Vec::new())
 }
@@ -71,6 +79,7 @@ pub(crate) fn fetch_icon(url: &str) -> AppResult<FetchedIcon> {
 /// 就不是真实行为了（比如换成了 Node 的网络栈，403 和 UA 问题全都不复现）。
 /// 正常抓取传一个随即丢弃的 `Vec`，代价只有一点记账。
 fn fetch_icon_into(url: &str, log: &mut Vec<ProbeStep>) -> AppResult<FetchedIcon> {
+    let page_url = parse_http_url(url)?;
     let mut budget = Budget::new(TOTAL_BUDGET_MS);
     let mut last_error = AppError::new("favicon_unavailable", "没有可用的网址图标".to_owned());
 
@@ -78,7 +87,7 @@ fn fetch_icon_into(url: &str, log: &mut Vec<ProbeStep>) -> AppResult<FetchedIcon
     // 先试这些一方已知地址，命中后连首页都不用请求；这正是 GitHub 的情况：
     // github.com/favicon.ico 会返回 403，但 github.githubassets.com/favicons/favicon.svg
     // 是官方静态资源且可直接取到。
-    for candidate in well_known_candidates(url) {
+    for candidate in well_known_candidates(&page_url) {
         match fetch_image(&candidate.url, log, &mut budget) {
             Ok(icon) => {
                 log.push(ProbeStep::note(
@@ -95,12 +104,14 @@ fn fetch_icon_into(url: &str, log: &mut Vec<ProbeStep>) -> AppResult<FetchedIcon
         }
     }
 
-    let declared = declared_candidates(url, log, &mut budget);
+    let mut declared = declared_candidates(&page_url, log, &mut budget);
+    let final_page_url = declared.final_page_url.take().unwrap_or(page_url);
     // 约定路径是**另一段**：声明的候选最多试 `MAX_CANDIDATES` 个，试完还没拿到才
     // 轮到它们。合成一条链的话，一个声明了 3 个图标却全都拿不到的站点就永远轮不
     // 到 `/favicon.ico`，而它往往就在那儿。
-    let conventions = convention_candidates(url);
+    let conventions = convention_candidates(&final_page_url);
     let chain = declared
+        .icons
         .iter()
         .take(MAX_CANDIDATES)
         .chain(conventions.iter());
@@ -284,44 +295,91 @@ pub(crate) fn sniff_kind(bytes: &[u8]) -> &'static str {
 }
 
 /// 取首页，把它声明的图标候选按质量排好序返回。
-fn declared_candidates(url: &str, log: &mut Vec<ProbeStep>, budget: &mut Budget) -> Vec<Candidate> {
-    let mut candidates = Vec::new();
+struct DeclaredCandidates {
+    icons: Vec<Candidate>,
+    final_page_url: Option<Url>,
+}
 
-    if let Some(parts) = split_url(url) {
-        match http::get(&parts, PAGE_MAX_BYTES, budget.remaining()) {
-            Ok(page) => {
-                let kind = sniff_kind(&page.body);
-                let declared = if page.status == 200 {
-                    let html = String::from_utf8_lossy(&page.body);
-                    let found = icon_candidates(&html, url);
-                    let count = found.len();
-                    candidates.extend(found);
-                    count
-                } else {
-                    0
-                };
-
+/// 取首页并逐跳校验重定向，使用最终地址解析页面中的相对图标链接。
+fn declared_candidates(
+    url: &Url,
+    log: &mut Vec<ProbeStep>,
+    budget: &mut Budget,
+) -> DeclaredCandidates {
+    let mut current = url.clone();
+    for redirect_count in 0..=MAX_REDIRECTS {
+        let current_text = current.as_str().to_owned();
+        let response = match http::get(&url_parts(&current), PAGE_MAX_BYTES, budget.remaining()) {
+            Ok(response) => response,
+            Err(error) => {
                 log.push(ProbeStep {
                     stage: "page".to_owned(),
-                    url: url.to_owned(),
-                    status: Some(page.status),
-                    bytes: page.body.len(),
-                    kind: Some(kind.to_owned()),
-                    note: format!("声明了 {declared} 个图标候选"),
+                    url: current_text,
+                    status: None,
+                    bytes: 0,
+                    kind: None,
+                    note: format!("取首页失败：{}", error.message),
                 });
+                return DeclaredCandidates {
+                    icons: Vec::new(),
+                    final_page_url: None,
+                };
             }
-            Err(error) => log.push(ProbeStep {
-                stage: "page".to_owned(),
-                url: url.to_owned(),
-                status: None,
-                bytes: 0,
-                kind: None,
-                note: format!("取首页失败：{}", error.message),
-            }),
-        }
-    }
+        };
 
-    candidates
+        match checked_redirect_target(&current, response.location.as_deref(), redirect_count) {
+            Ok(Some(next)) => {
+                log.push(ProbeStep {
+                    stage: "page".to_owned(),
+                    url: current_text,
+                    status: Some(response.status),
+                    bytes: 0,
+                    kind: None,
+                    note: format!("重定向到 {}", next.as_str()),
+                });
+                current = next;
+                continue;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                log.push(ProbeStep {
+                    stage: "page".to_owned(),
+                    url: current_text,
+                    status: Some(response.status),
+                    bytes: 0,
+                    kind: None,
+                    note: format!("拒绝重定向：{}", error.message),
+                });
+                return DeclaredCandidates {
+                    icons: Vec::new(),
+                    final_page_url: None,
+                };
+            }
+        }
+
+        let kind = sniff_kind(&response.body);
+        let icons = if response.status == 200 && kind == "html" {
+            icon_candidates(&String::from_utf8_lossy(&response.body), &current)
+        } else {
+            Vec::new()
+        };
+        log.push(ProbeStep {
+            stage: "page".to_owned(),
+            url: current_text,
+            status: Some(response.status),
+            bytes: response.body.len(),
+            kind: Some(kind.to_owned()),
+            note: format!("声明了 {} 个图标候选", icons.len()),
+        });
+        return DeclaredCandidates {
+            icons,
+            final_page_url: Some(current),
+        };
+    }
+    DeclaredCandidates {
+        icons: Vec::new(),
+        final_page_url: None,
+    }
 }
 
 /// 一个图标候选，带排序要用的质量信息。
@@ -424,16 +482,8 @@ fn format_rank(declared_type: Option<&str>, url: &str) -> u8 {
 /// 这里只放**明确属于站点本身**的已知地址，不是公共 favicon 服务，也不会把任意域名
 /// 发送给第三方。候选排在首页声明之前，是为了让 GitHub 这种首页 403 的站点仍能取到
 /// 官方图标；其他站点返回空列表，继续走普通链路。
-fn well_known_candidates(url: &str) -> Vec<Candidate> {
-    let authority = authority_of(url.split_once("://").map(|(_, rest)| rest).unwrap_or(url));
-    let host = authority
-        .rsplit('@')
-        .next()
-        .unwrap_or(authority)
-        .split(':')
-        .next()
-        .unwrap_or(authority)
-        .to_ascii_lowercase();
+fn well_known_candidates(url: &Url) -> Vec<Candidate> {
+    let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
 
     if host == "github.com" || host == "www.github.com" {
         return vec![Candidate {
@@ -450,19 +500,21 @@ fn well_known_candidates(url: &str) -> Vec<Candidate> {
 ///
 /// 排在页面声明的候选**之后** —— 声明是站点自己指明的，约定路径只是「可能在那儿」，
 /// 命中率明显低一档。
-fn convention_candidates(url: &str) -> Vec<Candidate> {
-    let (scheme, rest) = url.split_once("://").unwrap_or(("https", url));
-    let authority = authority_of(rest);
-
+fn convention_candidates(url: &Url) -> Vec<Candidate> {
     ["favicon.ico", "favicon.png", "apple-touch-icon.png"]
         .into_iter()
-        .map(|name| {
-            let path = format!("{scheme}://{authority}/{name}");
-            Candidate {
+        .filter_map(|name| {
+            let mut candidate = url.clone();
+            candidate.set_path("/");
+            candidate.set_query(None);
+            candidate.set_fragment(None);
+            candidate = candidate.join(name).ok()?;
+            let url = candidate.as_str().to_owned();
+            Some(Candidate {
                 edge: 0,
-                format: format_rank(None, &path),
-                url: path,
-            }
+                format: format_rank(None, &url),
+                url,
+            })
         })
         .collect()
 }
@@ -473,106 +525,115 @@ fn fetch_image(
     log: &mut Vec<ProbeStep>,
     budget: &mut Budget,
 ) -> AppResult<FetchedIcon> {
-    if let Some(icon) = decode_data_uri(candidate) {
-        log.push(ProbeStep::note(
-            "candidate",
-            candidate,
-            "内联 data URI，直接解码",
-        ));
-        return Ok(icon);
-    }
+    let mut current = parse_http_url(candidate)?;
+    for redirect_count in 0..=MAX_REDIRECTS {
+        let current_text = current.as_str().to_owned();
+        let response = http::get(&url_parts(&current), ICON_MAX_BYTES, budget.remaining())
+            .inspect_err(|error| {
+                log.push(ProbeStep {
+                    stage: "candidate".to_owned(),
+                    url: current_text.clone(),
+                    status: None,
+                    bytes: 0,
+                    kind: None,
+                    note: format!("请求失败：{}", error.message),
+                });
+            })?;
 
-    let parts = split_url(candidate).ok_or_else(|| {
-        AppError::new(
-            "favicon_url_invalid",
-            format!("不是一个可请求的网址: {candidate}"),
-        )
-    })?;
+        match checked_redirect_target(&current, response.location.as_deref(), redirect_count) {
+            Ok(Some(next)) => {
+                log.push(ProbeStep {
+                    stage: "candidate".to_owned(),
+                    url: current_text,
+                    status: Some(response.status),
+                    bytes: 0,
+                    kind: None,
+                    note: format!("重定向到 {}", next.as_str()),
+                });
+                current = next;
+                continue;
+            }
+            Ok(None) => {}
+            Err(error) => {
+                log.push(ProbeStep {
+                    stage: "candidate".to_owned(),
+                    url: current_text,
+                    status: Some(response.status),
+                    bytes: 0,
+                    kind: None,
+                    note: format!("拒绝重定向：{}", error.message),
+                });
+                return Err(error);
+            }
+        }
 
-    // 用 `inspect_err` 而不是 `map_err`：这里只想**顺便**记一笔，错误原样往上传。
-    let response = http::get(&parts, ICON_MAX_BYTES, budget.remaining()).inspect_err(|error| {
-        log.push(ProbeStep {
-            stage: "candidate".to_owned(),
-            url: candidate.to_owned(),
-            status: None,
-            bytes: 0,
-            kind: None,
-            note: format!("请求失败：{}", error.message),
-        });
-    })?;
-
-    let kind = sniff_kind(&response.body);
-    if response.status != 200 {
-        log.push(ProbeStep {
-            stage: "candidate".to_owned(),
-            url: candidate.to_owned(),
-            status: Some(response.status),
-            bytes: response.body.len(),
-            kind: Some(kind.to_owned()),
-            note: format!("状态 {}", response.status),
-        });
-        return Err(AppError::new(
-            "favicon_fetch_failed",
-            format!("{} 返回了状态 {}", candidate, response.status),
-        ));
-    }
-
-    if kind == "html" {
-        log.push(ProbeStep {
-            stage: "candidate".to_owned(),
-            url: candidate.to_owned(),
-            status: Some(response.status),
-            bytes: response.body.len(),
-            kind: Some(kind.to_owned()),
-            note: "状态 200 但内容是 HTML（软 404）".to_owned(),
-        });
-        return Err(AppError::new(
-            "favicon_not_image",
-            format!("{candidate} 返回的不是图片"),
-        ));
-    }
-
-    // SVG 不解码，原样交出去。
-    //
-    // `image` crate 不支持 SVG，送进去只会得到一个解码失败；而 WebView 的
-    // `<img>` 原生能渲染 SVG，矢量在 44px 的格子里还比位图清楚。所以这里
-    // 直接把字节带出去，由存储层按 `.svg` 落盘。
-    if kind == "svg" {
-        log.push(ProbeStep {
-            stage: "candidate".to_owned(),
-            url: candidate.to_owned(),
-            status: Some(response.status),
-            bytes: response.body.len(),
-            kind: Some(kind.to_owned()),
-            note: "SVG 原文，直接落盘".to_owned(),
-        });
-        return Ok(FetchedIcon::Svg(response.body));
-    }
-
-    match decode_image(&response.body, candidate) {
-        Ok(image) => {
+        let kind = sniff_kind(&response.body);
+        if response.status != 200 {
             log.push(ProbeStep {
                 stage: "candidate".to_owned(),
-                url: candidate.to_owned(),
+                url: current_text,
                 status: Some(response.status),
                 bytes: response.body.len(),
                 kind: Some(kind.to_owned()),
-                note: "解码成功".to_owned(),
+                note: format!("状态 {}", response.status),
             });
-            Ok(FetchedIcon::Bitmap(image))
+            return Err(AppError::new(
+                "favicon_fetch_failed",
+                format!("{} 返回了状态 {}", current, response.status),
+            ));
         }
-        Err(error) => {
+        if kind == "html" {
             log.push(ProbeStep {
                 stage: "candidate".to_owned(),
-                url: candidate.to_owned(),
+                url: current_text,
                 status: Some(response.status),
                 bytes: response.body.len(),
                 kind: Some(kind.to_owned()),
-                note: format!("解码失败：{}", error.message),
+                note: "状态 200 但内容是 HTML（软 404）".to_owned(),
             });
-            Err(error)
+            return Err(AppError::new(
+                "favicon_not_image",
+                format!("{} 返回的不是图片", current),
+            ));
         }
+        if kind == "svg" {
+            log.push(ProbeStep {
+                stage: "candidate".to_owned(),
+                url: current_text,
+                status: Some(response.status),
+                bytes: response.body.len(),
+                kind: Some(kind.to_owned()),
+                note: "SVG 原文，直接落盘".to_owned(),
+            });
+            return Ok(FetchedIcon::Svg(response.body));
+        }
+
+        return match decode_image(&response.body, current.as_str()) {
+            Ok(image) => {
+                log.push(ProbeStep {
+                    stage: "candidate".to_owned(),
+                    url: current_text,
+                    status: Some(response.status),
+                    bytes: response.body.len(),
+                    kind: Some(kind.to_owned()),
+                    note: "解码成功".to_owned(),
+                });
+                Ok(FetchedIcon::Bitmap(image))
+            }
+            Err(error) => {
+                log.push(ProbeStep {
+                    stage: "candidate".to_owned(),
+                    url: current_text,
+                    status: Some(response.status),
+                    bytes: response.body.len(),
+                    kind: Some(kind.to_owned()),
+                    note: format!("解码失败：{}", error.message),
+                });
+                Err(error)
+            }
+        };
     }
+    unreachable!("重定向循环必须在超过上限时返回")
 }
 
 /// 解码一段图片字节，并缩到统一的边长上限。
@@ -605,129 +666,91 @@ fn fit_within(image: RgbaImage) -> RgbaImage {
     imageops::resize(&image, target_width, target_height, FilterType::Lanczos3)
 }
 
-/// 就地解码 `data:image/…;base64,…` 形式的内联图标。
-///
-/// 有些站点把小图标直接内联在 HTML 里，省一个请求。这种候选不需要联网。
-///
-/// SVG 的 data URI 也走这里：同样不做解码，原样带出去。
-fn decode_data_uri(candidate: &str) -> Option<FetchedIcon> {
-    let rest = candidate.strip_prefix("data:")?;
-    if !rest.starts_with("image/") {
-        return None;
+fn parse_http_url(value: &str) -> AppResult<Url> {
+    let (_, authority_and_path) = value
+        .split_once("://")
+        .ok_or_else(|| AppError::new("favicon_url_invalid", format!("不是有效的网址: {value}")))?;
+    let authority = authority_and_path
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default();
+    if authority.is_empty() {
+        return Err(AppError::new(
+            "favicon_host_missing",
+            format!("网址没有有效主机: {value}"),
+        ));
     }
 
-    let (meta, payload) = rest.split_once(',')?;
-    // 形如 `image/png;base64`；不是 base64 的（URL 编码的 SVG 之类）直接放弃，
-    // 反正后面还有别的候选和兜底。
-    if !meta.to_ascii_lowercase().contains(";base64") {
-        return None;
+    let url = Url::parse(value).map_err(|error| {
+        AppError::new(
+            "favicon_url_invalid",
+            format!("不是有效的网址 {value}: {error}"),
+        )
+    })?;
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(AppError::new(
+            "favicon_scheme_unsupported",
+            format!("只允许 http 和 https 地址: {value}"),
+        ));
     }
-
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(payload.trim())
-        .ok()?;
-
-    if meta.to_ascii_lowercase().contains("svg") {
-        return Some(FetchedIcon::Svg(bytes));
+    if url.host().is_none() || url.host_str().map_or(true, str::is_empty) {
+        return Err(AppError::new(
+            "favicon_host_missing",
+            format!("网址没有有效主机: {value}"),
+        ));
     }
-
-    decode_image(&bytes, "内联图标")
-        .ok()
-        .map(FetchedIcon::Bitmap)
+    if url.port_or_known_default().is_none() {
+        return Err(AppError::new(
+            "favicon_port_invalid",
+            format!("网址端口无效: {value}"),
+        ));
+    }
+    Ok(url)
 }
 
-/// 把 URL 拆成 WinHTTP 需要的三部分。
-///
-/// `path_and_query` 至少是 `"/"` —— WinHTTP 的 `WinHttpOpenRequest` 传空路径
-/// 会被当成无效请求。
-pub(crate) fn split_url(url: &str) -> Option<UrlParts<'_>> {
-    let (scheme, rest) = url.split_once("://")?;
-    if scheme.is_empty() || rest.is_empty() {
-        return None;
-    }
-    let is_https = scheme.eq_ignore_ascii_case("https");
-
-    let (authority, path) = match rest.find(['/', '?', '#']) {
-        Some(index) => (&rest[..index], &rest[index..]),
-        None => (rest, "/"),
+fn checked_redirect_target(
+    base: &Url,
+    location: Option<&str>,
+    redirect_count: usize,
+) -> AppResult<Option<Url>> {
+    let Some(location) = location else {
+        return Ok(None);
     };
-
-    // 丢掉可能存在的 `user:pass@`；认证不在支持范围内，留着只会让主机名解析
-    // 出奇怪的结果。
-    let authority = authority.rsplit('@').next().unwrap_or(authority);
-
-    let (host, port) = match authority.rsplit_once(':') {
-        Some((host, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => {
-            (host, port.parse::<u16>().ok()?)
-        }
-        _ => (authority, if is_https { 443 } else { 80 }),
-    };
-
-    if host.is_empty() {
-        return None;
+    if redirect_count == MAX_REDIRECTS {
+        return Err(AppError::new(
+            "favicon_redirect_limit",
+            format!("重定向超过 {MAX_REDIRECTS} 次"),
+        ));
     }
+    resolve_http_reference(base, location).map(Some)
+}
 
-    Some(UrlParts {
+fn resolve_http_reference(base: &Url, reference: &str) -> AppResult<Url> {
+    let target = base.join(reference.trim()).map_err(|error| {
+        AppError::new(
+            "favicon_url_invalid",
+            format!("无法解析网址引用 {reference}: {error}"),
+        )
+    })?;
+    parse_http_url(target.as_str())
+}
+
+fn url_parts(url: &Url) -> http::UrlParts {
+    let host = match url.host().expect("已验证 HTTP URL 有主机") {
+        Host::Domain(host) => host.to_owned(),
+        Host::Ipv4(host) => host.to_string(),
+        Host::Ipv6(host) => format!("[{host}]"),
+    };
+    let path_and_query = match url.query() {
+        Some(query) => format!("{}?{query}", url.path()),
+        None => url.path().to_owned(),
+    };
+    http::UrlParts {
         host,
-        port,
-        path_and_query: if path.is_empty() { "/" } else { path },
-        is_https,
-    })
-}
-
-/// 把页面里写的相对地址解析成绝对地址。
-///
-/// 覆盖四种写法：绝对地址、协议相对 `//host/path`、根相对 `/path`、
-/// 文档相对 `path` / `./path` / `../path`。`data:` 原样返回，交给
-/// `decode_data_uri` 处理。
-pub(crate) fn resolve_reference(base: &str, reference: &str) -> Option<String> {
-    let reference = reference.trim();
-    if reference.is_empty() {
-        return None;
+        port: url.port_or_known_default().expect("已验证 HTTP URL 有端口"),
+        path_and_query,
+        is_https: url.scheme() == "https",
     }
-
-    if reference.starts_with("data:") {
-        return Some(reference.to_owned());
-    }
-
-    if let Some(rest) = reference.strip_prefix("//") {
-        let scheme = base.split_once("://").map(|(scheme, _)| scheme)?;
-        return Some(format!("{scheme}://{rest}"));
-    }
-
-    if reference.split_once("://").is_some() {
-        return Some(reference.to_owned());
-    }
-
-    let (scheme, rest) = base.split_once("://")?;
-    let authority = authority_of(rest);
-
-    if let Some(path) = reference.strip_prefix('/') {
-        return Some(format!("{scheme}://{authority}/{path}"));
-    }
-
-    let joined = join_path(&document_dir(rest), reference);
-    Some(format!("{scheme}://{authority}{joined}"))
-}
-
-/// 把文档相对路径拼到文档目录上，并折叠 `.` 与 `..`。
-///
-/// 站点里写 `./icon.png` 或 `../static/icon.png` 都很常见，不折叠就会拼出
-/// `/docs/./icon.png` 这种地址 —— 多数服务器能容忍，但也有直接 404 的。
-fn join_path(dir: &str, reference: &str) -> String {
-    let mut segments: Vec<&str> = dir.split('/').filter(|part| !part.is_empty()).collect();
-
-    for part in reference.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                segments.pop();
-            }
-            other => segments.push(other),
-        }
-    }
-
-    format!("/{}", segments.join("/"))
 }
 
 /// 从 HTML 里挑出图标候选，并按**质量**排序返回。
@@ -737,7 +760,7 @@ fn join_path(dir: &str, reference: &str) -> String {
 ///
 /// 排序规则：边长降序（同尺寸时位图优先于 ICO、ICO 优先于解不了的 SVG）。
 /// 文档顺序不作数 —— 站点常常把 16×16 的 ico 写在最前面。
-pub(crate) fn icon_candidates(html: &str, base: &str) -> Vec<Candidate> {
+pub(crate) fn icon_candidates(html: &str, base: &Url) -> Vec<Candidate> {
     // 大小写不敏感地找标签，但属性值（尤其是 URL）必须按原样取出。
     let lower = html.to_ascii_lowercase();
     let mut candidates = Vec::new();
@@ -770,8 +793,12 @@ pub(crate) fn icon_candidates(html: &str, base: &str) -> Vec<Candidate> {
 
         let declared_type = attribute_value(tag, "type");
         let sizes = attribute_value(tag, "sizes").unwrap_or_default();
-        if let Some(resolved) = resolve_reference(base, href) {
-            candidates.push(Candidate::new(resolved, declared_type.as_deref(), &sizes));
+        if let Ok(resolved) = resolve_http_reference(base, href) {
+            candidates.push(Candidate::new(
+                resolved.as_str().to_owned(),
+                declared_type.as_deref(),
+                &sizes,
+            ));
         }
     }
 
@@ -838,86 +865,80 @@ fn attribute_value(tag: &str, name: &str) -> Option<String> {
     Some(tag[from..to].to_ascii_lowercase())
 }
 
-/// 取 URL 里的 `host[:port]` 部分。
-fn authority_of(after_scheme: &str) -> &str {
-    match after_scheme.find(['/', '?', '#']) {
-        Some(index) => &after_scheme[..index],
-        None => after_scheme,
-    }
-}
-
-/// 取 URL 里文档所在目录，末尾带 `/`。
-fn document_dir(after_scheme: &str) -> String {
-    let path = match after_scheme.find(['/', '?', '#']) {
-        Some(index) => &after_scheme[index..],
-        None => "/",
-    };
-    let path = match path.find(['?', '#']) {
-        Some(index) => &path[..index],
-        None => path,
-    };
-
-    match path.rfind('/') {
-        Some(index) => format!("{}/", &path[..index]),
-        None => "/".to_owned(),
-    }
-}
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn split_url_derives_the_default_port_from_the_scheme() {
-        let parts = split_url("https://example.com/a/b?c=1").expect("https URL");
-        assert_eq!(parts.host, "example.com");
-        assert_eq!(parts.port, 443);
-        assert_eq!(parts.path_and_query, "/a/b?c=1");
-        assert!(parts.is_https);
+    fn parses_only_http_and_https_with_valid_hosts_and_ports() {
+        let https = parse_http_url("https://example.com/a/b?c=1").expect("https URL");
+        assert_eq!(https.scheme(), "https");
+        assert_eq!(https.host_str(), Some("example.com"));
+        assert_eq!(https.port_or_known_default(), Some(443));
+        assert_eq!(url_parts(&https).path_and_query, "/a/b?c=1");
 
-        let parts = split_url("http://example.com").expect("http URL");
-        assert_eq!(parts.port, 80);
-        // WinHTTP 不接受空路径。
-        assert_eq!(parts.path_and_query, "/");
-        assert!(!parts.is_https);
+        let http = parse_http_url("http://example.com").expect("http URL");
+        assert_eq!(http.port_or_known_default(), Some(80));
+        assert_eq!(url_parts(&http).path_and_query, "/");
+        assert!(parse_http_url("http://example.com:8080/x").is_ok());
+        assert!(parse_http_url("https://user:pw@example.com/x").is_ok());
     }
 
     #[test]
-    fn split_url_keeps_an_explicit_port_and_drops_credentials() {
-        let parts = split_url("http://example.com:8080/x").expect("explicit port");
-        assert_eq!(parts.host, "example.com");
-        assert_eq!(parts.port, 8080);
-
-        let parts = split_url("https://user:pw@example.com/x").expect("credentials");
-        assert_eq!(parts.host, "example.com");
-
-        // 不是 URL 的输入要能被挡住，否则 WinHTTP 会拿着空主机名去连。
-        assert!(split_url("not-a-url").is_none());
-        assert!(split_url("https://").is_none());
+    fn rejects_unsupported_schemes_missing_hosts_and_malformed_urls() {
+        for value in [
+            "ftp://example.com/a",
+            "file:///tmp/icon.png",
+            "data:image/png;base64,AAAA",
+        ] {
+            assert!(parse_http_url(value).is_err(), "must reject {value}");
+        }
+        for value in [
+            "not-a-url",
+            "https://",
+            "http:///path",
+            "http://example.com:99999/x",
+        ] {
+            assert!(parse_http_url(value).is_err(), "must reject {value}");
+        }
     }
 
     #[test]
-    fn resolve_reference_covers_absolute_protocol_root_and_document_forms() {
+    fn resolves_relative_links_with_url_parser_and_rejects_other_schemes() {
+        let base = parse_http_url("https://a.com/x/y?z=1").unwrap();
         assert_eq!(
-            resolve_reference("https://a.com/x/y", "https://b.com/i.png").as_deref(),
-            Some("https://b.com/i.png")
+            resolve_http_reference(&base, "https://b.com/i.png")
+                .unwrap()
+                .as_str(),
+            "https://b.com/i.png"
         );
         assert_eq!(
-            resolve_reference("http://a.com/x/y", "//b.com/i.png").as_deref(),
-            Some("http://b.com/i.png")
+            resolve_http_reference(&base, "//b.com/i.png")
+                .unwrap()
+                .as_str(),
+            "https://b.com/i.png"
         );
         assert_eq!(
-            resolve_reference("https://a.com/x/y", "/root/i.png").as_deref(),
-            Some("https://a.com/root/i.png")
+            resolve_http_reference(&base, "/root/i.png")
+                .unwrap()
+                .as_str(),
+            "https://a.com/root/i.png"
         );
         assert_eq!(
-            resolve_reference("https://a.com/x/y?z=1", "i.png").as_deref(),
-            Some("https://a.com/x/i.png")
+            resolve_http_reference(&base, "i.png").unwrap().as_str(),
+            "https://a.com/x/i.png"
         );
-        // `data:` 原样返回，交给 `decode_data_uri` 就地解码。
-        assert_eq!(
-            resolve_reference("https://a.com", "data:image/png;base64,AAAA").as_deref(),
-            Some("data:image/png;base64,AAAA")
-        );
+        assert!(resolve_http_reference(&base, "data:image/png;base64,AAAA").is_err());
+        assert!(resolve_http_reference(&base, "javascript:alert(1)").is_err());
+    }
+
+    #[test]
+    fn accepts_https_to_http_downgrade_and_validates_each_redirect_target() {
+        let base = parse_http_url("https://a.com/start").unwrap();
+        let downgraded = resolve_http_reference(&base, "http://b.com/next").unwrap();
+        assert_eq!(downgraded.scheme(), "http");
+        assert_eq!(downgraded.host_str(), Some("b.com"));
+        assert!(resolve_http_reference(&base, "ftp://b.com/next").is_err());
     }
 
     /// 只比地址，不比排序信息 —— 质量字段单独有用例覆盖。
@@ -927,13 +948,16 @@ mod tests {
 
     #[test]
     fn well_known_candidates_handles_github_official_asset() {
-        let candidates = well_known_candidates("https://github.com/org/repo");
+        let github = parse_http_url("https://github.com/org/repo").unwrap();
+        let candidates = well_known_candidates(&github);
         assert_eq!(
             urls_of(&candidates),
             vec!["https://github.githubassets.com/favicons/favicon.svg"]
         );
-        assert!(well_known_candidates("https://gist.github.com").is_empty());
-        assert!(well_known_candidates("https://example.com").is_empty());
+        let gist = parse_http_url("https://gist.github.com").unwrap();
+        let example = parse_http_url("https://example.com").unwrap();
+        assert!(well_known_candidates(&gist).is_empty());
+        assert!(well_known_candidates(&example).is_empty());
     }
 
     #[test]
@@ -946,7 +970,8 @@ mod tests {
             </head></html>
         "#;
 
-        let candidates = icon_candidates(html, "https://a.com/docs/page");
+        let base = parse_http_url("https://a.com/docs/page").unwrap();
+        let candidates = icon_candidates(html, &base);
         // 没写 sizes 的按「够用」计，所以 touch.png 排在 32×32 的 fav.png 前面。
         assert_eq!(
             urls_of(&candidates),
@@ -963,7 +988,10 @@ mod tests {
         );
 
         assert_eq!(
-            urls_of(&icon_candidates(html, "https://a.com")),
+            urls_of(&icon_candidates(
+                html,
+                &parse_http_url("https://a.com").unwrap()
+            )),
             vec![
                 "https://a.com/wide.png",
                 "https://a.com/full-width.png",
@@ -977,7 +1005,10 @@ mod tests {
         let html = "<link\u{3000}rel=\"icon\"\u{00a0}href=\"/icon.png\">";
 
         assert_eq!(
-            urls_of(&icon_candidates(html, "https://a.com")),
+            urls_of(&icon_candidates(
+                html,
+                &parse_http_url("https://a.com").unwrap()
+            )),
             vec!["https://a.com/icon.png"]
         );
     }
@@ -987,7 +1018,10 @@ mod tests {
         // `data-href` 里也有 `href`，不能被误当成真正的属性。
         let html = r#"<link rel="icon" data-href="/wrong.png" href="/right.png">"#;
         assert_eq!(
-            urls_of(&icon_candidates(html, "https://a.com")),
+            urls_of(&icon_candidates(
+                html,
+                &parse_http_url("https://a.com").unwrap()
+            )),
             vec!["https://a.com/right.png"]
         );
     }
@@ -1002,7 +1036,10 @@ mod tests {
 
         // 256px 的 SVG 在前，随后是 180px 位图，再后是 16px ICO。
         assert_eq!(
-            urls_of(&icon_candidates(html, "https://a.com")),
+            urls_of(&icon_candidates(
+                html,
+                &parse_http_url("https://a.com").unwrap()
+            )),
             vec![
                 "https://a.com/huge.svg",
                 "https://a.com/big.png",
@@ -1028,8 +1065,9 @@ mod tests {
 
     #[test]
     fn convention_candidates_covers_the_usual_paths() {
+        let page = parse_http_url("https://a.com/docs/page").unwrap();
         assert_eq!(
-            urls_of(&convention_candidates("https://a.com/docs/page")),
+            urls_of(&convention_candidates(&page)),
             vec![
                 "https://a.com/favicon.ico",
                 "https://a.com/favicon.png",

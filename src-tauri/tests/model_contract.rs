@@ -1,4 +1,4 @@
-use app_lib::models::{
+use lib::models::{
     AddAppRequest, AddCategoryRequest, AddGroupRequest, AppData, AppEXE, AppError, Category,
     DeleteRequest, Group, IconType, Item, MoveGroupRequest, RenameRequest, RootItem,
 };

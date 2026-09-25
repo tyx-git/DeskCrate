@@ -20,7 +20,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use app_lib::{
+use lib::{
     models::{AddAppRequest, AddAppsRequest},
     services::catalog,
 };
@@ -38,8 +38,10 @@ struct ProcessMemory {
 #[test]
 #[ignore = "启动真实 GUI 进程，只用于手动性能评估"]
 fn evaluate_startup_time_and_memory() {
-    let binary = application_binary()
-        .expect("找不到 app.exe；请先构建应用目标，或在 Cargo 提供 CARGO_BIN_EXE_app 后再运行评估");
+    let binary = application_binary().expect(
+        "找不到 deskcrate.exe；请先构建应用目标，或在 Cargo 提供 \
+         CARGO_BIN_EXE_deskcrate 后再运行评估",
+    );
 
     let mut child = Command::new(&binary)
         .stdin(Stdio::null())
@@ -113,7 +115,7 @@ fn evaluate_url_icon_crawler_time() {
         .unwrap_or_else(|_| "https://github.com".to_owned());
     let started = Instant::now();
     let report =
-        app_lib::commands::diagnostics::probe_url_icon(url.clone()).expect("图标探针应该返回报告");
+        lib::commands::diagnostics::probe_url_icon(url.clone()).expect("图标探针应该返回报告");
     let elapsed_ms = started.elapsed().as_millis();
     let report_json = serde_json::to_string(&report).expect("探针报告应当可以序列化");
 
@@ -187,23 +189,29 @@ fn evaluate_batch_add_apps_time() {
     );
 }
 
+// `CARGO_BIN_EXE_<name>` 里的 `<name>` 是 bin target 名（即包名），改包名必须
+// 同步这里，否则会静默回退到「按目录猜路径」那条分支。
 fn application_binary() -> Option<PathBuf> {
-    if let Some(path) = option_env!("CARGO_BIN_EXE_app") {
+    if let Some(path) = option_env!("CARGO_BIN_EXE_deskcrate") {
         return Some(PathBuf::from(path));
     }
 
-    if let Some(path) = std::env::var_os("CARGO_BIN_EXE_app") {
+    if let Some(path) = std::env::var_os("CARGO_BIN_EXE_deskcrate") {
         return Some(PathBuf::from(path));
     }
 
     // 兼容手动从 target/debug/deps 下执行测试的情况。Cargo 通常会在同一
-    // profile 目录旁边生成 app.exe。
+    // profile 目录旁边生成 deskcrate.exe。
     let mut profile_dir = std::env::current_exe().ok()?;
     profile_dir.pop();
     if profile_dir.file_name().is_some_and(|name| name == "deps") {
         profile_dir.pop();
     }
-    let binary = profile_dir.join(if cfg!(windows) { "app.exe" } else { "app" });
+    let binary = profile_dir.join(if cfg!(windows) {
+        "deskcrate.exe"
+    } else {
+        "deskcrate"
+    });
     binary.is_file().then_some(binary)
 }
 

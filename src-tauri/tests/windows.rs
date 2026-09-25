@@ -2,7 +2,7 @@ mod support;
 
 use std::fs;
 
-use app_lib::{
+use lib::{
     models::{AppData, AppEXE, Category, CssSize, IconType, Item, RootItem, ViewMode, WindowSize},
     services::{self, system},
     storage::DataRepository,
@@ -23,7 +23,7 @@ fn app_record(source_path: &str, icon_type: IconType) -> AppEXE {
     }
 }
 
-fn state_with_app(directory: &TestDir, app: AppEXE) -> app_lib::state::AppState {
+fn state_with_app(directory: &TestDir, app: AppEXE) -> lib::state::AppState {
     let store = directory.store();
     let data = AppData {
         version: 2,
@@ -37,7 +37,7 @@ fn state_with_app(directory: &TestDir, app: AppEXE) -> app_lib::state::AppState 
         ..AppData::default()
     };
     store.save_data(&data).expect("fixture data should save");
-    app_lib::state::AppState::new(store)
+    lib::state::AppState::new(store)
 }
 
 #[test]

@@ -1,8 +1,8 @@
 [package]
-name = "app"
+name = "deskcrate"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "Windows桌面收纳应用"
+authors = ["ttxyz"]
 license = ""
 repository = ""
 edition = "2021"
@@ -11,7 +11,7 @@ rust-version = "1.77.2"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [lib]
-name = "app_lib"
+name = "lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -27,6 +27,7 @@ tauri = { version = "2.11.3", default-features = false, features = ["wry", "prot
 tauri-plugin-log = "2"
 chrono = "0.4"
 uuid = { version = "1", features = ["v4"] }
+url = "2.5.8"
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_Storage_FileSystem",
@@ -43,8 +44,6 @@ windows = { version = "0.58", features = [
     "Win32_System_Registry",
 ] }
 lnk = "0.3"
-# 只用来解码内联在 `<link rel=icon href="data:image/...;base64,...">` 里的图标。
-base64 = "0.22"
 # `ico` 是 exe/dll 的图标容器，`jpeg/gif/bmp/webp` 是网站图标常见的格式。
 image = { version = "0.25", features = [
     "png",
