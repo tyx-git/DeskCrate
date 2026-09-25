@@ -115,6 +115,17 @@ pub fn reconcile_auto_start(state: &AppState) -> AppResult<()> {
     Ok(())
 }
 
+// 后台清理失效的启动项。
+//
+// 与上面的对账分开：对账要**立刻**完成（写/删 `DeskCrate` 那一条值），而清理是
+// 纯粹的扫尾工作 —— 要枚举整个 Run 键、读「启动」文件夹、解析 `.lnk`（COM），
+// 放到后台线程做，既不拖住窗口创建，也不在主线程上初始化 COM。
+//
+// 顺序上必须在对账**之后**：两者都要动 Run 键，串行执行才不会有竞争。
+pub fn sweep_stale_auto_start_entries() {
+    std::thread::spawn(system::registory::sweep_stale_auto_start_entries);
+}
+
 fn validate_settings(settings: &Settings) -> AppResult<()> {
     // 缓存尺寸和用户尺寸覆盖都会在下次启动时被直接应用到窗口上，
     // 0 宽或 0 高的窗口既看不见也点不到，两者用同一条规则校验。

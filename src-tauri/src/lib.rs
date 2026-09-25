@@ -91,6 +91,10 @@ pub fn run() {
                 log::warn!("开机自启动对账失败: {error}");
             }
 
+            // 扫尾：清掉指向已删除副本的注册表启动项，以及「启动」文件夹里失效或
+            // 会和我们双开的快捷方式。放后台线程，失败只记日志。
+            services::settings::sweep_stale_auto_start_entries();
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

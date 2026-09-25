@@ -106,10 +106,13 @@ pub(crate) fn parse_shortcut(path: &Path) -> AppResult<ParsedShortcut> {
 }
 
 // 初始化当前线程的 COM Apartment，并在离开作用域时释放初始化计数。
-struct ComApartment;
+//
+// `pub(crate)` 是因为 `registory` 的启动项清理也要用 COM：它既要解析「启动」
+// 文件夹里的 `.lnk`，又要调 `SHGetKnownFolderPath` 取那个文件夹的路径。
+pub(crate) struct ComApartment;
 
 impl ComApartment {
-    fn initialize() -> AppResult<Self> {
+    pub(crate) fn initialize() -> AppResult<Self> {
         let result = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
 
         if result.is_err() {

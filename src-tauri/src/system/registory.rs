@@ -24,17 +24,32 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use windows::{
-    core::PCWSTR,
+    core::{PCWSTR, PWSTR},
     Win32::{
-        Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS},
-        System::Registry::{
-            RegCloseKey, RegCreateKeyW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW,
-            RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_SAM_FLAGS, REG_SZ,
+        Foundation::{
+            ERROR_FILE_NOT_FOUND, ERROR_MORE_DATA, ERROR_NO_MORE_ITEMS, ERROR_SUCCESS, HANDLE,
         },
+        System::{
+            Com::CoTaskMemFree,
+            Registry::{
+                RegCloseKey, RegCreateKeyW, RegDeleteValueW, RegEnumValueW, RegOpenKeyExW,
+                RegQueryValueExW, RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_READ, KEY_WRITE,
+                REG_SAM_FLAGS, REG_SZ,
+            },
+        },
+        UI::Shell::{FOLDERID_Startup, SHGetKnownFolderPath, KNOWN_FOLDER_FLAG},
     },
 };
 
-use crate::{error::AppResult, models::AppError, system::wide};
+use crate::{
+    error::AppResult,
+    models::AppError,
+    system::{shortcut, wide},
+};
+
+// 枚举 Run 键时放值名的缓冲区长度（字符）。Run 的值名都是短标识符，1024 足够；
+// 真遇到更长的名字会返回 `ERROR_MORE_DATA`，跳过即可。
+const VALUE_NAME_CAPACITY: usize = 1024;
 
 // 自启动项在注册表里的名字。
 //
@@ -228,6 +243,222 @@ fn delete_auto_start() -> AppResult<()> {
         let _ = RegCloseKey(key);
     };
     result
+}
+
+/// 扫描并清理失效的启动项。
+///
+/// 两个来源：
+///
+/// 1. **Run 键里任意值名**下、指向已不存在的 `deskcrate.exe` 的条目。我们自己的
+///    值名固定是 `DeskCrate`（由 `reconcile_auto_start` 处理），但用户可能手工
+///    添加过别的名字；程序被挪走或删掉之后，那些条目就是每次开机弹一个「找不到
+///    文件」的垃圾。
+/// 2. **「启动」文件夹**里指向 `deskcrate.exe` 的快捷方式。
+///
+/// 判定只看**目标文件名是否与我们当前的可执行文件同名**（不区分大小写），
+/// 因此不会误删别的程序的启动项。
+///
+/// 由 `lib.rs` 在启动时丢到后台线程执行：这里要枚举注册表、读「启动」文件夹并
+/// 解析快捷方式（COM），不该拖住窗口创建，也不该在主线程上初始化 COM。
+pub(crate) fn sweep_stale_auto_start_entries() {
+    let Some(exe_name) = std::env::current_exe().ok().and_then(|path| {
+        path.file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+    }) else {
+        log::warn!("取不到当前可执行文件名，跳过失效启动项清理");
+        return;
+    };
+
+    if let Err(error) = sweep_run_key(&exe_name) {
+        log::warn!("清理注册表启动项失败: {error}");
+    }
+
+    // 解析快捷方式和取「启动」文件夹路径都要 COM，在这个后台线程上初始化一次。
+    // 失败就只跳过「启动」文件夹这一半 —— 注册表那半已经做完了。
+    let _com = match shortcut::ComApartment::initialize() {
+        Ok(com) => com,
+        Err(error) => {
+            log::warn!("初始化 COM 失败，跳过「启动」文件夹清理: {error}");
+            return;
+        }
+    };
+    if let Err(error) = sweep_startup_folder(&exe_name) {
+        log::warn!("清理「启动」文件夹失败: {error}");
+    }
+}
+
+/// 清掉 Run 键里指向已失效 `deskcrate.exe` 的条目（不区分值名）。
+fn sweep_run_key(exe_name: &str) -> AppResult<()> {
+    // 删值需要 `KEY_WRITE`；键不存在就没什么可清理的。
+    let Some(key) = open_run_key(KEY_READ | KEY_WRITE, false)? else {
+        return Ok(());
+    };
+    let result = sweep_run_key_values(key, exe_name);
+    unsafe {
+        let _ = RegCloseKey(key);
+    };
+    result
+}
+
+fn sweep_run_key_values(key: HKEY, exe_name: &str) -> AppResult<()> {
+    let mut index = 0u32;
+    let mut buffer = vec![0u16; VALUE_NAME_CAPACITY];
+
+    loop {
+        let mut name_length = u32::try_from(buffer.len()).unwrap_or(0);
+        let status = unsafe {
+            RegEnumValueW(
+                key,
+                index,
+                PWSTR(buffer.as_mut_ptr()),
+                &mut name_length,
+                None,
+                None,
+                None,
+                None,
+            )
+        };
+
+        if status == ERROR_NO_MORE_ITEMS {
+            return Ok(());
+        }
+        if status == ERROR_MORE_DATA {
+            // 值名长过缓冲区，跳过后继续 —— 不是我们写得出来的名字。
+            index += 1;
+            continue;
+        }
+        if status != ERROR_SUCCESS {
+            return Err(AppError::new(
+                "auto_start_enum_failed",
+                "无法枚举注册表启动项",
+            ));
+        }
+
+        let value_name = String::from_utf16_lossy(&buffer[..name_length as usize]);
+        let command_line = read_string(key, &value_name)?.unwrap_or_default();
+
+        if !should_sweep(&command_line, exe_name) {
+            index += 1;
+            continue;
+        }
+
+        match delete_value(key, &value_name) {
+            Ok(()) => {
+                log::info!("已清理失效的启动项 {value_name}（目标 {command_line} 已不存在）");
+                // 删掉之后同一个下标会落到下一个值上，不能再自增。
+            }
+            Err(error) => {
+                log::warn!("清不掉失效的启动项 {value_name}: {error}");
+                index += 1;
+            }
+        }
+    }
+}
+
+/// 清掉「启动」文件夹里指向 `deskcrate.exe` 的快捷方式。
+fn sweep_startup_folder(exe_name: &str) -> AppResult<()> {
+    let Some(folder) = startup_folder() else {
+        return Ok(());
+    };
+
+    let entries = match fs::read_dir(&folder) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(AppError::new(
+                "startup_folder_unreadable",
+                format!("读不到「启动」文件夹 {}: {error}", folder.display()),
+            ));
+        }
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let is_shortcut = path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("lnk"));
+        if !is_shortcut {
+            continue;
+        }
+
+        let parsed = match shortcut::parse_shortcut(&path) {
+            Ok(parsed) => parsed,
+            // 解析不了就无法判断它是不是我们的，留着不动。
+            Err(error) => {
+                log::debug!(
+                    "跳过无法解析的启动快捷方式 {}: {}",
+                    path.display(),
+                    error.message
+                );
+                continue;
+            }
+        };
+        if !is_our_executable(Path::new(&parsed.target_path), exe_name) {
+            continue;
+        }
+
+        // 目标存在与否都删：
+        // - 存在 → 会和 Run 值一起把程序拉起两次，屏幕上出现两个侧栏；
+        // - 不存在 → 每次开机弹一个「找不到文件」。
+        match fs::remove_file(&path) {
+            Ok(()) => log::info!(
+                "已清理「启动」文件夹里的 {}（目标 {}）",
+                path.display(),
+                parsed.target_path
+            ),
+            Err(error) => log::warn!("删不掉启动快捷方式 {}: {error}", path.display()),
+        }
+    }
+
+    Ok(())
+}
+
+/// 取「启动」文件夹路径。
+///
+/// 用 `FOLDERID_Startup` 而不是拼 `%APPDATA%\...\Startup`：后者在用户通过策略
+/// 挪过 Start Menu 的机器上会指向一个不存在的目录，于是清理静默失效。
+fn startup_folder() -> Option<PathBuf> {
+    let raw =
+        unsafe { SHGetKnownFolderPath(&FOLDERID_Startup, KNOWN_FOLDER_FLAG(0), HANDLE::default()) }
+            .ok()?;
+
+    let path = unsafe { raw.to_string() }.ok().map(PathBuf::from);
+    // `SHGetKnownFolderPath` 用 `CoTaskMemAlloc` 分配，必须配 `CoTaskMemFree`，
+    // 否则每次启动漏一小块内存。
+    unsafe { CoTaskMemFree(Some(raw.0 as *const std::ffi::c_void)) };
+
+    path
+}
+
+/// 一条 Run 值该不该被清理。
+///
+/// 两个条件同时成立才清理：目标文件名与我们同名（不误删别的程序），且目标已经
+/// 不存在（清掉才是有意义的）。抽成纯函数是为了能用真实的 Run 键内容做回归 ——
+/// 这个函数返回 true 就意味着真的会删注册表值。
+fn should_sweep(command_line: &str, exe_name: &str) -> bool {
+    let target = Path::new(executable_path_of(command_line));
+    is_our_executable(target, exe_name) && !target.exists()
+}
+
+/// 从 Run 值里取出可执行文件路径。
+///
+/// 按 Windows 的命令行规则切：带引号就取引号内的部分（应对 `Program Files`
+/// 这类带空格的路径），否则取到第一个空白为止。
+fn executable_path_of(command_line: &str) -> &str {
+    let trimmed = command_line.trim();
+    match trimmed.strip_prefix('"') {
+        Some(rest) => rest.split('"').next().unwrap_or(rest),
+        None => trimmed.split_whitespace().next().unwrap_or(""),
+    }
+}
+
+/// 路径的文件名是否与我们当前的可执行文件同名（不区分大小写）。
+fn is_our_executable(candidate: &Path, exe_name: &str) -> bool {
+    candidate
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case(exe_name))
 }
 
 /// 打开 Run 键。
@@ -451,5 +682,98 @@ mod tests {
             quoted.trim().trim_matches('"'),
             r"C:\Program Files\DeskCrate\deskcrate.exe"
         );
+    }
+
+    #[test]
+    fn command_line_parsing_handles_quoted_unquoted_and_argument_forms() {
+        // 我们自己写入的形式（带引号）。
+        assert_eq!(
+            executable_path_of(r#""C:\Program Files\DeskCrate\deskcrate.exe""#),
+            r"C:\Program Files\DeskCrate\deskcrate.exe"
+        );
+        // 手工添加的常见形式：带引号 + 参数。
+        assert_eq!(
+            executable_path_of(r#""C:\A\deskcrate.exe" --minimized"#),
+            r"C:\A\deskcrate.exe"
+        );
+        // 无引号、无空格。
+        assert_eq!(
+            executable_path_of(r"C:\A\deskcrate.exe"),
+            r"C:\A\deskcrate.exe"
+        );
+        // 无引号但带参数：按 Windows 规则切到第一个空白。
+        assert_eq!(
+            executable_path_of(r"C:\A\deskcrate.exe --minimized"),
+            r"C:\A\deskcrate.exe"
+        );
+        // 两端空白要忽略；空串不能 panic。
+        assert_eq!(executable_path_of("   "), "");
+        assert_eq!(executable_path_of(""), "");
+    }
+
+    #[test]
+    fn executable_name_matching_is_case_insensitive_and_strict() {
+        assert!(is_our_executable(
+            Path::new(r"C:\A\deskcrate.exe"),
+            "deskcrate.exe"
+        ));
+        assert!(is_our_executable(
+            Path::new(r"C:\A\DeskCrate.EXE"),
+            "deskcrate.exe"
+        ));
+
+        // 别的程序绝不能命中 —— 这个扫描会真的删注册表值。
+        assert!(!is_our_executable(
+            Path::new(r"C:\A\deskcrate-other.exe"),
+            "deskcrate.exe"
+        ));
+        assert!(!is_our_executable(
+            Path::new(r"C:\A\app.exe"),
+            "deskcrate.exe"
+        ));
+        // 目录没有文件名，不能命中。
+        assert!(!is_our_executable(Path::new(r"C:\A\"), "deskcrate.exe"));
+        // 空命令行的解析结果不能命中。
+        assert!(!is_our_executable(Path::new(""), "deskcrate.exe"));
+    }
+
+    #[test]
+    fn sweep_decision_never_fires_on_foreign_startup_entries() {
+        // 这些是真实开发机上 Run 键里的内容（2026-09-25 实测）。这个函数返回
+        // true 就会真的删掉注册表值，所以拿真实数据当回归夹具：一个都不能命中。
+        //
+        // 注意其中 `E:\MuMu Player 12\...` 是**未加引号且带空格**的写法，
+        // 按命令行规则会被切成 `E:\MuMu`。解析结果确实不对，但方向是安全的：
+        // 切出来的文件名不是 `deskcrate.exe`，所以不会误删。这条用例把「解析
+        // 不完美也不误删」这个性质钉住。
+        let foreign = [
+            r#""C:\Program Files\Microsoft OneDrive\OneDrive.exe" /background"#,
+            r"c4732a97-536e-417d-88c1-61e45e7e33c6",
+            r"0",
+            r"E:\MuMu Player 12\shell\MuMuPlayerService.exe",
+            r"C:\Users\lenovo\AppData\Local\Programs\utools\uTools.exe",
+            r#""C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" --win-session-start"#,
+        ];
+        for command_line in foreign {
+            assert!(
+                !should_sweep(command_line, "deskcrate.exe"),
+                "不能命中别的程序: {command_line}"
+            );
+        }
+    }
+
+    #[test]
+    fn sweep_decision_fires_only_for_missing_our_own_copy() {
+        // 目标已不存在 → 该清。
+        assert!(should_sweep(r#""C:\gone\deskcrate.exe""#, "deskcrate.exe"));
+        // 目标存在（用当前测试进程自己当样本）→ 不清。
+        let existing = std::env::current_exe().expect("测试进程应当有可执行文件路径");
+        let exe_name = existing
+            .file_name()
+            .expect("可执行文件应当有文件名")
+            .to_string_lossy()
+            .into_owned();
+        let command_line = quote_path(&existing.to_string_lossy());
+        assert!(!should_sweep(&command_line, &exe_name));
     }
 }
