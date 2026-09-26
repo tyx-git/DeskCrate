@@ -10,7 +10,8 @@
   </p>
 </div>
 
-![DeskCrate 侧栏](docs/assets/sidebar-overview.png)
+![DeskCrate 侧栏](images/1790406503307.png)
+![DeskCrate 侧栏](images/1790406569976.png)
 
 ## 项目简介
 
@@ -103,7 +104,7 @@ flowchart LR
 ### 获取源码
 
 ```powershell
-git clone https://github.com/tyx-git/DeskCrate.git
+git clone https://gitee.com/tian-someone/DeskCrate.git
 Set-Location DeskCrate
 ```
 
@@ -126,14 +127,6 @@ cargo tauri dev
 
 Tauri 会启动 Vite 开发服务器，并在前端初始化完成后显示透明悬浮窗口。
 
-### 仅运行浏览器预览
-
-```powershell
-npm --prefix react run dev
-```
-
-然后打开 <http://localhost:5173>。浏览器预览会自动使用内存 mock 后端和演示数据，适合查看侧栏布局、设置页、拖拽和窗口尺寸预览。
-
 ### 构建 release
 
 先构建前端，再构建带内嵌资源的 Rust release：
@@ -147,17 +140,17 @@ cargo build --release --features custom-protocol
 最终产物：
 
 ```text
-src-tauri/target/release/app.exe
+src-tauri/target/release/deskcrate.exe
 ```
 
 `custom-protocol` feature 会把 `react/dist` 嵌入二进制，使程序可以脱离 Vite 开发服务器运行。
 
 ## 数据与文件布局
 
-DeskCrate 将运行时数据保存在可执行文件同级目录，便于移动和备份：
+DeskCrate将运行时数据保存在可执行文件同级目录，便于移动和备份：
 
 ```text
-DeskCrate.exe
+deskcrate.exe
 config/
   data.json       分类、分组、应用和快捷方式
   config.json     主题、窗口状态、自动收起和开机自启动
@@ -189,32 +182,6 @@ HKCU\Software\Microsoft\Windows\CurrentVersion\Run\DeskCrate
 
 新增节点的 UUID 由后端生成。前端根据返回的 ID 进行重命名、删除、启动和拖拽换位，不使用名称作为主键。
 
-## 质量检查
-
-后端：
-
-```powershell
-Set-Location src-tauri
-cargo fmt -- --check
-cargo clippy --all-targets -- -D warnings
-cargo test
-cargo build --release --features custom-protocol
-```
-
-前端：
-
-```powershell
-npm --prefix react run build
-npm --prefix react run lint
-```
-
-项目还包含真实 Tauri 窗口回归脚本，用于检查展开/收起几何、窗口尺寸、顶层应用排序、嵌入式 release 资源和设置页交互：
-
-```powershell
-node dosc/五项核实/release-regression.mjs
-node dosc/五项核实/settings-page-check.mjs
-```
-
 ## 项目目录
 
 ```text
@@ -243,17 +210,17 @@ DeskCrate/
 
 欢迎通过 GitHub 提交 Issue 和 Pull Request：
 
-- Issue：<https://github.com/tyx-git/DeskCrate/issues>
-- Pull Request：<https://github.com/tyx-git/DeskCrate/pulls>
-- 项目地址：<https://github.com/tyx-git/DeskCrate.git>
+- Issue：<https://gitee.com/tian-someone/DeskCrate/issues>
+- Pull Request：<https://gitee.com/tian-someone/DeskCrate/pulls>
+- 项目地址：<https://gitee.com/tian-someone/DeskCrate.git>
 
 提交 Issue 时请包含复现步骤、预期行为、实际行为、Windows 版本和相关日志。涉及模型、Command 或持久化格式的改动，请同时补充对应测试。
 
 ## 作者与版本
 
 - 作者：TTxyz
-- 当前版本：`v0.1.0`
-- 仓库：<https://github.com/tyx-git/DeskCrate.git>
+- 当前版本：`v1.0.0`
+- 仓库：<https://gitee/tian-someone/DeskCrate.git>
 
 ## 许可证
 

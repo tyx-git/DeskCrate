@@ -1,9 +1,2 @@
-dosc/
 build/
-!docs/
-!docs/assets/
-!docs/assets/*.png
-.idea/
-.claude/
-.superpowers/
-.workbuddy-ai/
+dosc/
