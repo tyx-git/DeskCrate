@@ -8,5 +8,7 @@ pub(crate) mod icon_extract;
 // 既有的引用与文档。
 pub(crate) mod registory;
 pub(crate) mod shortcut;
+// 单实例防护：命名互斥量 + 激活已有实例的窗口。
+pub(crate) mod single_instance;
 pub(crate) mod support;
 pub(crate) mod wide;

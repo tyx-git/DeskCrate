@@ -14,6 +14,20 @@ pub(crate) mod text;
 pub fn run() {
     use tauri::Manager;
 
+    // 单实例：拿不到所有权就直接退出，**绝不进入下面的 Builder**。
+    //
+    // 窗口是透明、无边框、置顶的悬浮层，两个实例会精确叠在同一位置，用户看不出
+    // 有两个。而且第二个实例跑一遍 `setup` 还会重复建目录、并发执行启动项清理。
+    // 这里把已有实例的窗口调到前台，是兜住「第一个实例的窗口没能显示出来」那种
+    // 情况 —— 否则用户双击之后毫无反应，也不知道为什么。
+    //
+    // 守卫必须绑定在 `run()` 的局部变量上：`run()` 会阻塞到应用退出，生命周期
+    // 正好覆盖整个进程；一旦提前 drop，互斥量释放，第二个实例就能启动了。
+    let Some(_instance) = system::single_instance::acquire() else {
+        system::single_instance::activate_existing_window();
+        return;
+    };
+
     tauri::Builder::default()
         .setup(|app| {
             let exe_path = std::env::current_exe()?;

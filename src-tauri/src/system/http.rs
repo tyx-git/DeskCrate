@@ -31,36 +31,29 @@ use crate::{
 
 // 一次 GET 的上限与超时。
 //
-// 图标只有几十 KB，但 HTML 首页可能有几 MB；不加限制地读下去，抓取就会变成
-// 卡住添加流程好几秒的元凶。
+// 图标只有几十 KB，但 HTML 首页可能有几 MB；不加限制地读下去，抓取就会卡住添加流程好几秒。
 const READ_CHUNK: usize = 16 * 1024;
 
 // 请求用的 User-Agent。
-//
-// 这里刻意带上浏览器的形态，**实测依据**（见 `dosc/图标抓取/probe-result.md`）：
-// 同一个站点 `squoosh.app`，用产品自己的 UA 要 6349ms 才响应，换成浏览器 UA 只要
-// 637ms —— 差 10 倍。不少站点（CDN 或反爬）会给非浏览器客户端走慢速通道，在几秒
-// 的超时预算下走慢速通道就等于直接失败。
-//
-// 末尾仍然带上真实的产品标识：这是程序在替用户取图标，不是冒充用户浏览网页，
-// 留个真名让对方能识别来源。
+// 这里刻意带上浏览器的形态，实测同一个站点squoosh.app，用产品自己的UA要6349ms才响应，换成浏览器UA只要
+// 637ms。不少站点（CDN 或反爬）会给非浏览器客户端走慢速通道，在几秒的超时预算下走慢速通道就等于直接失败。
+// 末尾仍然带上真实的产品标识：这是程序在替用户取图标，不是冒充用户浏览网页，留个真名让对方能识别来源。
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
      (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36 DeskCrate/0.1";
 
-/// 一次 GET 的结果。
+// 一次 GET 的结果。
 pub(crate) struct HttpResponse {
-    /// HTTP 状态码。
+    // HTTP 状态码。
     pub status: u32,
-    /// 手动处理重定向时使用的 Location 响应头。
+    // 手动处理重定向时使用的 Location 响应头。
     pub location: Option<String>,
-    /// 响应体，长度不超过调用方给定的上限。
+    // 响应体，长度不超过调用方给定的上限。
     pub body: Vec<u8>,
 }
 
-/// 发起一个 GET 请求，最多读 `max_bytes` 字节。
-///
-/// 自动重定向被禁用；调用方必须先校验 `Location` 才能发出下一跳请求。
-/// `timeout_ms` 分别套在解析、连接、发送和接收上。
+// 发起一个GET请求，最多读max_bytes字节。
+// 自动重定向被禁用；调用方必须先校验Location才能发出下一跳请求。
+// timeout_ms分别套在解析、连接、发送和接收上。
 pub(crate) fn get(url: &UrlParts, max_bytes: usize, timeout_ms: i32) -> AppResult<HttpResponse> {
     let agent = wide::to_wide(USER_AGENT);
     let server = wide::to_wide(&url.host);
@@ -68,7 +61,7 @@ pub(crate) fn get(url: &UrlParts, max_bytes: usize, timeout_ms: i32) -> AppResul
     let method = wide::to_wide("GET");
 
     unsafe {
-        // 会话 -> 连接 -> 请求，三级句柄都必须关掉；用 `Handle` 包一层，
+        // 会话->连接->请求，三级句柄都必须关掉；用Handle包一层，
         // 任何一次提前返回都会按逆序释放。
         let session = Handle::new(WinHttpOpen(
             PCWSTR(agent.as_ptr()),
@@ -84,7 +77,7 @@ pub(crate) fn get(url: &UrlParts, max_bytes: usize, timeout_ms: i32) -> AppResul
             0,
         ))?;
 
-        // https 必须带 `WINHTTP_FLAG_SECURE`，否则 WinHTTP 会用明文去连 443 端口。
+        // https必须带WINHTTP_FLAG_SECURE，否则WinHTTP会用明文去连443端口。
         let flags = if url.is_https {
             WINHTTP_FLAG_SECURE
         } else {
@@ -109,7 +102,7 @@ pub(crate) fn get(url: &UrlParts, max_bytes: usize, timeout_ms: i32) -> AppResul
         )
         .map_err(|error| support::windows_error("http_timeout_failed", error))?;
 
-        // 必须在收到响应前关闭 WinHTTP 自动重定向，否则每一跳都绕开 URL 策略校验。
+        // 必须在收到响应前关闭WinHTTP自动重定向，否则每一跳都绕开URL策略校验。
         let redirect_policy = WINHTTP_DISABLE_REDIRECTS.to_ne_bytes();
         WinHttpSetOption(
             Some(request.get()),
@@ -143,8 +136,8 @@ pub(crate) fn get(url: &UrlParts, max_bytes: usize, timeout_ms: i32) -> AppResul
     }
 }
 
-/// 拆好的 URL：WinHTTP 的 `WinHttpConnect` / `WinHttpOpenRequest` 要分开传
-/// 主机名和路径，所以调用方先拆好。
+// 拆好的 URL：WinHTTP 的 `WinHttpConnect` / `WinHttpOpenRequest` 要分开传
+// 主机名和路径，所以调用方先拆好。
 pub(crate) struct UrlParts {
     pub host: String,
     pub port: u16,
@@ -152,12 +145,12 @@ pub(crate) struct UrlParts {
     pub is_https: bool,
 }
 
-/// 判断是否为 HTTP 重定向响应。
+// 判断是否为 HTTP 重定向响应。
 fn is_redirect(status: u32) -> bool {
     matches!(status, 301 | 302 | 303 | 307 | 308)
 }
 
-/// 读取文本响应头。
+// 读取文本响应头。
 unsafe fn query_text_header(request: *mut c_void, name: u32) -> AppResult<Option<String>> {
     let mut length = 0;
     let query_name = PCWSTR::null();
@@ -206,7 +199,7 @@ unsafe fn query_text_header(request: *mut c_void, name: u32) -> AppResult<Option
     Ok(Some(value))
 }
 
-/// 读状态码。带 `WINHTTP_QUERY_FLAG_NUMBER` 时缓冲区是一个 `u32`。
+// 读状态码。带 `WINHTTP_QUERY_FLAG_NUMBER` 时缓冲区是一个 `u32`。
 unsafe fn query_status(request: *mut c_void) -> AppResult<u32> {
     let mut status: u32 = 0;
     let mut length = u32::try_from(size_of::<u32>()).unwrap_or(4);
@@ -226,9 +219,9 @@ unsafe fn query_status(request: *mut c_void) -> AppResult<u32> {
     Ok(status)
 }
 
-/// 循环读响应体，累计到 `max_bytes` 就停。
-///
-/// 超长响应不报错、直接截断 —— 抓图标时「少读一点」比「整次失败」有用得多：
+// 循环读响应体，累计到 `max_bytes` 就停。
+//
+// 超长响应不报错、直接截断 —— 抓图标时「少读一点」比「整次失败」有用得多：
 //  首页 HTML 只需要前面那截 `<head>` 里的图标声明。
 unsafe fn read_body(request: *mut c_void, max_bytes: usize) -> AppResult<Vec<u8>> {
     let mut body = Vec::new();
@@ -278,10 +271,10 @@ unsafe fn read_body(request: *mut c_void, max_bytes: usize) -> AppResult<Vec<u8>
     Ok(body)
 }
 
-/// WinHTTP 句柄的所有权包装，离开作用域即关闭。
-///
-/// 直接拿裸指针写下去，任何一次 `?` 提前返回都会泄漏句柄；这类泄漏在一个
-/// 常驻的桌面程序里会一直累积。
+// WinHTTP 句柄的所有权包装，离开作用域即关闭。
+//
+// 直接拿裸指针写下去，任何一次 `?` 提前返回都会泄漏句柄；这类泄漏在一个
+// 常驻的桌面程序里会一直累积。
 struct Handle(*mut c_void);
 
 impl Handle {
