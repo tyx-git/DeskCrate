@@ -64,7 +64,7 @@ function Scrim({ onDismiss, children }: { onDismiss: () => void; children: React
     <div
       ref={ref}
       onKeyDown={trapTab}
-      className="absolute inset-0 z-40 flex items-center justify-center bg-[rgb(0_0_0_/_0.18)] px-[5%]"
+      className="absolute inset-0 z-40 flex items-center justify-center bg-[rgb(28_32_36_/_0.3)] px-[5%] backdrop-blur-[3px]"
       onPointerDown={(event) => {
         if (event.target === event.currentTarget) {
           onDismiss()
@@ -96,19 +96,20 @@ function ConfirmDialog({ dialog }: { dialog: DialogState }) {
         role="alertdialog"
         aria-modal="true"
         aria-labelledby={DIALOG_TITLE_ID}
-        className="w-full rounded-sheet bg-sheet p-[5%] text-field text-ink shadow-sheet backdrop-blur-sheet"
+        className="dc-sheet-border w-full rounded-[10px] bg-sheet p-[5%] text-field text-ink shadow-sheet backdrop-blur-sheet"
       >
-        <h2 id={DIALOG_TITLE_ID} className="text-group font-semibold break-words">
+        <p className="dc-dialog__eyebrow">CONFIRM</p>
+        <h2 id={DIALOG_TITLE_ID} className="text-cat font-semibold break-words">
           {dialog.targetName ?? '确认操作'}
         </h2>
-        <p className="mt-[3%] text-chip leading-[1.5] break-words text-ink-soft">
+        <p className="mt-[3%] text-desc leading-[1.5] break-words text-ink-mute">
           {dialog.message}
         </p>
-        <div className="mt-[5%] flex justify-end gap-[2%] text-chip">
+        <div className="mt-[5%] flex justify-end gap-[6px] text-desc">
           <button
             type="button"
             onClick={close}
-            className="rounded-[6px] px-[4%] py-[1.8%] text-ink-soft transition-colors hover:bg-hover"
+            className="dc-btn dc-btn--ghost"
           >
             取消
           </button>
@@ -119,7 +120,7 @@ function ConfirmDialog({ dialog }: { dialog: DialogState }) {
               close()
               dialog.onConfirm?.()
             }}
-            className="rounded-[6px] bg-danger px-[4%] py-[1.8%] text-white transition-opacity hover:opacity-90"
+            className="dc-btn dc-btn--danger"
           >
             {dialog.confirmLabel ?? '确认'}
           </button>
@@ -131,6 +132,7 @@ function ConfirmDialog({ dialog }: { dialog: DialogState }) {
 
 interface FieldMeta {
   title: string
+  eyebrow: string
   confirmLabel: string
   nameLabel?: string
   namePlaceholder?: string
@@ -142,6 +144,7 @@ function describeDialog(dialog: DialogState): FieldMeta {
     case 'new-category':
       return {
         title: '新建分类',
+        eyebrow: 'NEW CATEGORY',
         confirmLabel: '创建',
         nameLabel: '分类名称',
         namePlaceholder: '例如：开发工具',
@@ -149,6 +152,7 @@ function describeDialog(dialog: DialogState): FieldMeta {
     case 'new-group':
       return {
         title: `在「${dialog.targetName ?? ''}」下新建分组`,
+        eyebrow: 'NEW GROUP',
         confirmLabel: '创建',
         nameLabel: '分组名称',
         namePlaceholder: '例如：编辑器',
@@ -160,13 +164,14 @@ function describeDialog(dialog: DialogState): FieldMeta {
           dialog.targetId === ROOT_ID
             ? '添加应用到顶层'
             : `向「${dialog.targetName ?? ''}」添加应用`,
+        eyebrow: 'ADD APP',
         confirmLabel: '添加',
         nameLabel: '显示名称（可选）',
         namePlaceholder: '留空则按来源自动命名',
         withSourcePath: true,
       }
     default:
-      return { title: '重命名', confirmLabel: '保存', nameLabel: '新名称' }
+      return { title: '重命名', eyebrow: 'RENAME', confirmLabel: '保存', nameLabel: '新名称' }
   }
 }
 
@@ -256,15 +261,16 @@ function DialogForm({ dialog }: { dialog: DialogState }) {
         aria-modal="true"
         aria-labelledby={DIALOG_TITLE_ID}
         onSubmit={(event) => void submit(event)}
-        className="w-full rounded-sheet bg-sheet p-[5%] text-field text-ink shadow-sheet backdrop-blur-sheet"
+        className="dc-sheet-border w-full rounded-[10px] bg-sheet p-[5%] text-field text-ink shadow-sheet backdrop-blur-sheet"
       >
-        <h2 id={DIALOG_TITLE_ID} className="text-group font-semibold break-words">
+        <p className="dc-dialog__eyebrow">{meta.eyebrow}</p>
+        <h2 id={DIALOG_TITLE_ID} className="text-cat font-semibold break-words">
           {meta.title}
         </h2>
 
         {meta.withSourcePath ? (
           <label className="mt-[4%] block">
-            <span className="mb-[1.5%] block text-chip text-ink-soft">来源路径或网址</span>
+            <span className="mb-[1.5%] block text-desc text-ink-mute">来源路径或网址</span>
             <input
               ref={firstFieldRef}
               type="text"
@@ -272,13 +278,13 @@ function DialogForm({ dialog }: { dialog: DialogState }) {
               spellCheck={false}
               placeholder="C:\\Tools\\App\\app.exe 或 https://example.com"
               onChange={(event) => setSourcePath(event.target.value)}
-              className="w-full rounded-field border border-field-line bg-field px-field-x py-field-y text-field text-ink outline-none placeholder:text-ink-faint"
+              className="dc-input"
             />
           </label>
         ) : null}
 
         <label className="mt-[4%] block">
-          <span className="mb-[1.5%] block text-chip text-ink-soft">
+          <span className="mb-[1.5%] block text-desc text-ink-mute">
             {meta.nameLabel ?? '名称'}
             {nameRequired ? '' : '（可选）'}
           </span>
@@ -289,30 +295,30 @@ function DialogForm({ dialog }: { dialog: DialogState }) {
             spellCheck={false}
             placeholder={meta.namePlaceholder}
             onChange={(event) => setName(event.target.value)}
-            className="w-full rounded-field border border-field-line bg-field px-field-x py-field-y text-field text-ink outline-none placeholder:text-ink-faint"
+            className="dc-input"
           />
         </label>
 
         {meta.withSourcePath ? (
-          <p className="mt-[3%] text-chip leading-[1.4] text-ink-faint">
+          <p className="mt-[3%] text-desc leading-[1.4] text-ink-faint">
             {isPreviewMode
               ? '浏览器预览模式下不会真的解析图标，只做本地记录。'
               : '也可以把文件、文件夹或快捷方式直接拖到侧栏：拖到分类上就进该分类，拖到两条分界线之间则作为顶层应用插在那个位置。填网址会自动抓取站点图标。'}
           </p>
         ) : null}
 
-        <div className="mt-[5%] flex justify-end gap-[2%] text-chip">
+        <div className="mt-[5%] flex justify-end gap-[6px] text-desc">
           <button
             type="button"
             onClick={close}
-            className="rounded-[6px] px-[4%] py-[1.8%] text-ink-soft transition-colors hover:bg-hover"
+            className="dc-btn dc-btn--ghost"
           >
             取消
           </button>
           <button
             type="submit"
             disabled={!canSubmit}
-            className="rounded-[6px] bg-[rgb(58_96_190_/_0.85)] px-[4%] py-[1.8%] text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+            className="dc-btn dc-btn--primary"
           >
             {meta.confirmLabel}
           </button>

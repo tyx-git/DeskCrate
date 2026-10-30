@@ -197,7 +197,7 @@ export function ContextMenu() {
       aria-orientation="vertical"
       aria-label={menu.target ? `${menu.target.name} 的操作` : '侧栏操作'}
       style={{ left: position.left, top: position.top }}
-      className="absolute z-30 min-w-[8.5em] overflow-hidden rounded-sheet bg-sheet py-[0.5em] text-chip text-ink shadow-sheet backdrop-blur-sheet"
+      className="dc-sheet-border absolute z-30 min-w-[8.5em] overflow-hidden rounded-[10px] bg-sheet py-[4px] text-desc text-ink shadow-sheet backdrop-blur-sheet"
       onBlur={(event) => {
         // 焦点离开菜单就收起：按 Tab 走出去以后菜单还悬在那里会一直挡住下面的内容。
         if (!ref.current?.contains(event.relatedTarget)) {
@@ -234,10 +234,10 @@ export function ContextMenu() {
               close()
               entry.onSelect()
             }}
-            className={`block w-full px-[1.1em] py-[0.45em] text-left transition-colors duration-100 disabled:cursor-not-allowed disabled:opacity-40 ${
+            className={`block w-full px-[9px] py-[4px] text-left transition-colors duration-100 disabled:cursor-not-allowed disabled:opacity-40 ${
               entry.tone === 'danger'
-                ? 'text-danger hover:bg-[rgb(176_56_56_/_0.12)]'
-                : 'hover:bg-active'
+                ? 'text-danger hover:bg-[rgb(176_74_62_/_0.1)]'
+                : 'hover:bg-hover'
             }`}
           >
             {entry.label}

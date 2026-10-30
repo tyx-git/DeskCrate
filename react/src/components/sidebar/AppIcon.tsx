@@ -47,9 +47,6 @@ export function AppIcon({
   const dropHint = useUiStore((state) => state.dropHint)
   const hint = dropHint?.nodeId === app.id ? dropHint.position : null
 
-  const surface = selected
-    ? 'bg-active ring-1 ring-inset ring-focus'
-    : 'hover:bg-hover active:bg-active'
 
   return (
     <button
@@ -64,13 +61,13 @@ export function AppIcon({
       onDragOver={onDragOver}
       onDrop={onDrop}
       onDragEnd={onDragEnd}
-      className={`dc-app-icon relative flex w-icon-item shrink-0 flex-col items-center rounded-[6px] py-[0.6cqw] outline-none transition-colors duration-100 ${surface} ${
+      className={`dc-app-icon ${selected ? 'is-selected' : ''} ${
         dragging ? 'opacity-40' : ''
       } ${hint === 'before' ? 'dc-drop-before' : ''} ${
         hint === 'after' ? 'dc-drop-after' : ''
       }`}
     >
-      <span className="flex h-icon-glyph w-icon-glyph items-center justify-center">
+      <span className="dc-plate">
         {showImage ? (
           <img
             src={app.iconUrl}
@@ -80,14 +77,12 @@ export function AppIcon({
             className="max-h-full max-w-full object-contain"
           />
         ) : (
-          <span className="text-glyph leading-none">
+          <span className="dc-app-glyph leading-none">
             {ICON_FALLBACK_GLYPH[app.iconType]}
           </span>
         )}
       </span>
-      <span className="dc-ellipsis mt-[3px] w-full text-center text-app leading-[1.2] text-ink-mute">
-        {app.name}
-      </span>
+      <span className="dc-app-label dc-ellipsis">{app.name}</span>
     </button>
   )
 }

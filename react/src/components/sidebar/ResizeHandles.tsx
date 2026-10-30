@@ -190,7 +190,7 @@ export function ResizeHandles() {
             event.preventDefault()
             event.stopPropagation()
           }}
-          className={`absolute z-20 transition-colors duration-100 hover:bg-[rgb(58_96_190_/_0.45)] ${handle.className}`}
+          className={`absolute z-20 transition-colors duration-100 hover:bg-[rgb(47_93_140_/_0.45)] ${handle.className}`}
         />
       ))}
     </div>

@@ -2,6 +2,7 @@ import { locateNode, type NodeLocation } from '../../lib/tree'
 import { useCatalogStore } from '../../state/catalogStore'
 import { useUiStore } from '../../state/uiStore'
 import type { AppEXE } from '../../types/catalog'
+import { BrandRail } from './BrandRail'
 import { SettingsPanel } from './SettingsPanel'
 import { SidebarBody } from './SidebarBody'
 import { SidebarFooter } from './SidebarFooter'
@@ -67,12 +68,13 @@ export function Sidebar({
 
   return (
     <TreeProvider actions={actions}>
-      <div className="group/panel flex h-full w-full flex-col overflow-hidden rounded-panel bg-panel shadow-panel backdrop-blur-glass">
+      <div className="dc-panel group/panel flex h-full w-full flex-col overflow-hidden">
         {settingsOpen ? (
           // 设置页顶掉主体与底栏；头部也换掉，因为搜索框在设置页里没有意义。
           <SettingsPanel />
         ) : (
           <>
+            <BrandRail />
             <SidebarHeader />
             <SidebarBody activeDropIndex={activeDropIndex} isDragging={isDragging} />
             <SidebarFooter />

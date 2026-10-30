@@ -5,11 +5,7 @@ import { IconButton } from '../common/IconButton'
 
 /**
  * 设置图标：八齿齿轮，单路径轮廓，比「圆 + 八条辐条」更像那么回事。
- * 颜色用 `currentColor`，由 IconButton 的 `text-caret hover:text-ink` 决定。
- *
- * 尺寸是 `1em + 2px`：底栏字号是 `text-chip`（设计稿尺寸下约 10px），加 2px 让它
- * 比旁边的「+」和文字更显眼一点。用 `calc` 而不是写死 12px，是为了在字号被
- * 容器查询压小时图标也跟着退回去，不至于撑破 1.9em 的按钮。
+ * 颜色用 `currentColor`，由调用方的类决定。
  */
 function GearIcon() {
   return (
@@ -33,21 +29,24 @@ export function SidebarFooter() {
   const setSettingsOpen = useUiStore((state) => state.setSettingsOpen)
 
   return (
-    <footer className="dc-converge flex items-center gap-[1.4cqw] border-t border-hairline px-[5%] py-[1.6%] text-chip text-ink-faint">
-      <IconButton
-        label="新建分类"
+    <footer className="dc-foot dc-converge">
+      <button
+        type="button"
         onClick={() => openDialog({ kind: 'new-category' })}
-        className="text-caret hover:text-ink"
+        className="dc-foot__new"
       >
-        +
-      </IconButton>
+        <i aria-hidden="true">＋</i>新建分类
+      </button>
 
-      <span className="shrink-0">{total} 个应用</span>
+      <span className="dc-foot__count">
+        <b>{total}</b>
+        <i>项</i>
+      </span>
 
       <IconButton
         label="设置"
         onClick={() => setSettingsOpen(true)}
-        className="ml-auto text-caret hover:text-ink"
+        className="text-[11px] text-ink-faint hover:text-ink"
       >
         <GearIcon />
       </IconButton>

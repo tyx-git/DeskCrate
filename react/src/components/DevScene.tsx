@@ -15,13 +15,7 @@ export function DevScene({ children }: { children: ReactNode }) {
   const box = usePreviewBox(viewMode)
 
   return (
-    <div
-      className="fixed inset-0 overflow-hidden"
-      style={{
-        background:
-          'linear-gradient(135deg, #16202e 0%, #2b3a55 38%, #6b5b95 68%, #c98bb9 100%)',
-      }}
-    >
+    <div className="dc-devscene fixed inset-0 overflow-hidden">
       <div
         className="absolute"
         style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
@@ -29,8 +23,8 @@ export function DevScene({ children }: { children: ReactNode }) {
         {children}
       </div>
 
-      <div className="pointer-events-none absolute right-[3%] top-[3%] rounded-[6px] bg-[rgb(0_0_0_/_0.6)] px-[16px] py-[6px] text-[13px] text-white/70 backdrop-blur-[10px]">
-        <strong className="font-semibold text-white">
+      <div className="dc-devscene__badge pointer-events-none absolute right-[3%] top-[3%] rounded-[6px] px-[14px] py-[6px] text-[12px]">
+        <strong className="font-semibold text-ink">
           {viewMode === 'collapsed' ? '收起态' : '展开态'}
         </strong>
         <span>

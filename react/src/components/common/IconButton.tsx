@@ -19,7 +19,7 @@ export function IconButton({
 }: IconButtonProps) {
   const toneClass =
     tone === 'danger'
-      ? 'text-danger hover:bg-[rgb(176_56_56_/_0.1)]'
+      ? 'text-ink-soft hover:bg-[rgb(176_74_62_/_0.1)] hover:text-danger'
       : 'text-ink-soft hover:bg-hover hover:text-ink'
 
   return (

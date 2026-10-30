@@ -1,96 +1,81 @@
 @import 'tailwindcss';
 
 /* ============================================================================
- * DeskCrate 设计令牌
+ * DeskCrate 设计令牌 · 白瓷（v4）
  *
- * 数值来源：dosc/plan/展示页.html（展开态）与 dosc/plan/收起态.html（收起态），
- * 以及 src-tauri/src/models/settings.rs 的 `css` 模块。改设计时三处需要同步。
+ * 面板是一层半透的白釉：壁纸能隐约透进来，但 0.84→0.76 的白底 + 模糊保证
+ * 文字对比度。颜色只有墨色、灰阶和一处靛蓝（焦点/选中/开关/收起锁扣），
+ * 彩色只来自应用图标本身。
  *
- * 关键换算：设计稿里的字号用「场景宽度的百分比」（vw）表达，而真实窗口只有
- * 侧栏那么大。侧栏占场景宽度 18.75%，因此
- *
- *     1 场景 vw = 1 / 0.1875 = 5.3333 个「侧栏宽度百分比」（cqw）
- *
- * 这里统一改用容器查询单位 cqw，让字号跟随侧栏自身宽度等比缩放。好处是
- * 浏览器预览和 Tauri 窗口内表现完全一致，不依赖窗口在屏幕上的绝对大小。
+ * 字号以侧栏自身宽度为基准（cqw），所以浏览器预览与 Tauri 窗口内一致；
+ * 窗口几何（留白、指示条、模糊半径）来自 `src/spec/window.json`，由 JS 注入。
  * ========================================================================== */
 @theme {
-  /* ---- 字号：括号内为设计稿原始值 ---- */
-  --text-cat: clamp(10px, 5.867cqw, 16px); /* 1.1vw 分类名 */
-  --text-cat-icon: clamp(11px, 5.333cqw, 16px); /* 1vw 分类图标 */
-  --text-caret: clamp(8px, 4.267cqw, 12px); /* 0.8vw 分类箭头 */
-  --text-group: clamp(9px, 4.8cqw, 14px); /* 0.9vw 分组名 */
-  --text-caret-sm: clamp(7px, 3.733cqw, 10px); /* 0.7vw 分组箭头 */
-  --text-chip: clamp(7px, 3.467cqw, 10px); /* 0.65vw 分组计数 */
-  --text-app: clamp(7px, 3.467cqw, 11px); /* 0.65vw 应用名 */
-  --text-field: clamp(9px, 4.533cqw, 13px); /* 0.85vw 搜索框 */
-  --text-glyph: clamp(14px, 9.6cqw, 28px); /* 1.8vw 图标兜底字形 */
+  /* ---- 字号 ---- */
+  --text-word: clamp(10.5px, 3.3cqw, 13px); /* 字标 */
+  --text-cat: clamp(12.5px, 3.85cqw, 15px); /* 分类名 / 页面标题 */
+  --text-group: clamp(11.75px, 3.7cqw, 14px); /* 分组名 / 设置项 */
+  --text-app: clamp(10.75px, 3.35cqw, 12.5px); /* 应用名 */
+  --text-desc: clamp(9.75px, 3.15cqw, 11.5px); /* 说明文字 / 菜单项 */
+  --text-count: clamp(9.25px, 2.95cqw, 10.75px); /* 计数 */
+  --text-field: clamp(11px, 3.5cqw, 13px); /* 输入框 */
+  --text-eyebrow: clamp(7px, 2.35cqw, 8.5px); /* 小标 / 键帽 */
+  --text-glyph: clamp(18px, 6.6cqw, 24px); /* 图标兜底字形 */
 
-  /* ---- 尺寸：同样按侧栏宽度等比缩放 ---- */
-  --spacing-icon-item: clamp(36px, 21.333cqw, 64px); /* 4vw 图标项宽度 */
-  --spacing-icon-glyph: clamp(24px, 16cqw, 44px); /* 3vw 图标本体边长 */
-  --spacing-grid-gap: clamp(4px, 4.267cqw, 12px); /* 0.8vw 图标间距 */
-  --spacing-field-y: clamp(4px, 3.2cqw, 8px); /* 0.6vw 搜索框纵向内边距 */
-  --spacing-field-x: clamp(8px, 5.333cqw, 14px); /* 1vw 搜索框横向内边距 */
+  /* ---- 尺寸 ---- */
+  --spacing-grid-gap: clamp(5px, 2.2cqw, 9px);
+  --spacing-icon-plate: clamp(36px, 12.2cqw, 44px); /* 瓷白托盘边长 */
 
   /* 窗口留白：与 Rust 侧 OVERLAY_SHADOW_GUTTER_PX / SIDEBAR_LEFT_PX 对齐 */
   --spacing-gutter: var(--dc-spec-gutter);
   --spacing-edge: var(--dc-spec-sidebar-left);
-  /* 指示条尺寸：与 Rust 侧 COLLAPSED_STRIP_WIDTH/HEIGHT_PX 对齐，收束动画的目标
-     形状也是这个尺寸（见 .dc-stage--converged）。 */
+  /* 指示条尺寸：与 Rust 侧 COLLAPSED_STRIP_WIDTH/HEIGHT_PX 对齐 */
   --spacing-strip-w: var(--dc-spec-strip-width);
   --spacing-strip-h: var(--dc-spec-strip-height);
 
-  /* ---- 色板：中性·柔白 ---- */
-  --color-panel: rgb(235 235 240 / 0.55); /* 侧栏玻璃底色 */
-  --color-ink: rgb(25 25 30 / 0.92); /* 分类名 */
-  --color-ink-soft: rgb(25 25 30 / 0.68); /* 分组名 */
-  --color-ink-mute: rgb(25 25 30 / 0.55); /* 应用名 */
-  --color-ink-faint: rgb(25 25 30 / 0.42); /* 搜索框占位符 */
-  --color-caret: rgb(0 0 0 / 0.3); /* 分类箭头 */
-  --color-caret-soft: rgb(0 0 0 / 0.22); /* 分组箭头 */
-  --color-hairline: rgb(0 0 0 / 0.04); /* 分类行下边框 / 分隔线 */
-  --color-hover: rgb(0 0 0 / 0.03); /* 悬停底色 */
-  --color-active: rgb(0 0 0 / 0.06); /* 选中底色 */
-  --color-chip: rgb(0 0 0 / 0.05); /* 分组计数底色 */
-  --color-chip-ink: rgb(0 0 0 / 0.4); /* 分组计数文字 */
-  --color-field: rgb(0 0 0 / 0.03); /* 搜索框底色 */
-  --color-field-line: rgb(0 0 0 / 0.05); /* 搜索框描边 */
-  --color-strip: rgb(255 255 255 / 0.6); /* 收起指示条 */
-  /* 以下为设计稿未覆盖、但交互必需的颜色 */
-  --color-sheet: rgb(250 250 252 / 0.92); /* 菜单与对话框底色 */
-  --color-danger: rgb(176 56 56); /* 删除类操作 */
-  --color-focus: rgb(58 96 190 / 0.5); /* 键盘焦点环 */
-  /* 拖放文件的插入指示：分界线变色，沿用焦点环的蓝，但调亮一点，
-     在半透明面板上比 hairline 明显、又不至于像报错。 */
-  --color-drop-active: rgb(58 96 190 / 0.85);
+  /* ---- 色板 ---- */
+  --color-ink: #1c2024; /* 主文字 */
+  --color-ink-soft: rgb(28 32 36 / 0.82); /* 次主文字 */
+  --color-ink-mute: rgb(28 32 36 / 0.64); /* 说明 / 应用名 */
+  --color-ink-faint: rgb(28 32 36 / 0.46); /* 占位符 / 小标 */
+  --color-accent: #2f5d8c; /* 唯一的强调色 */
+  --color-accent-soft: rgb(47 93 140 / 0.1);
+  --color-danger: #b04a3e; /* 釉里红 */
+  --color-danger-soft: rgb(176 74 62 / 0.1);
 
-  /* ---- 形状 ---- */
+  --color-hairline: rgb(28 32 36 / 0.1); /* 发丝线 */
+  --color-hairline-soft: rgb(28 32 36 / 0.06);
+  --color-hover: rgb(47 93 140 / 0.06); /* 悬停底色 */
+  --color-field: rgb(28 32 36 / 0.035); /* 输入槽 */
+  --color-field-line: rgb(28 32 36 / 0.12);
+  --color-sheet: rgb(255 255 255 / 0.97); /* 菜单与对话框 */
+  --color-focus: rgb(47 93 140 / 0.55); /* 键盘焦点环 */
+  --color-drop-active: rgb(47 93 140 / 0.8); /* 拖放插入线 */
+  --color-strip: rgb(255 255 255 / 0.88);
+
+  /* ---- 形状与阴影 ---- */
   --radius-panel: var(--dc-spec-panel-radius);
-  --radius-field: 10px;
-  --radius-chip: 3px;
-  --radius-strip: var(--dc-spec-strip-radius);
+  --radius-field: 6px;
+  --radius-plate: 10px;
   --radius-sheet: 10px;
+  --radius-strip: var(--dc-spec-strip-radius);
 
-  --blur-glass: var(--dc-spec-glass-blur); /* 侧栏背景模糊 */
-  --blur-sheet: 20px; /* 菜单与对话框模糊 */
+  --blur-sheet: 18px;
 
   --shadow-panel:
-    4px 0 24px rgb(0 0 0 / 0.15), 1px 0 8px rgb(0 0 0 / 0.08),
-    inset 1px 1px 0 rgb(255 255 255 / 0.12);
-  --shadow-field: inset 0 1px 3px rgb(0 0 0 / 0.04);
-  --shadow-strip: 0 0 6px rgb(255 255 255 / 0.15);
+    0 18px 40px rgb(28 32 36 / 0.1), inset 0 1px 0 rgb(255 255 255 / 0.85),
+    inset 0 0 0 1px rgb(28 32 36 / 0.1);
+  --shadow-field: inset 0 1px 2px rgb(28 32 36 / 0.04);
+  --shadow-plate: inset 0 1px 0 #fff, 0 1px 3px rgb(28 32 36 / 0.05);
+  --shadow-strip:
+    0 0 0 1px rgb(28 32 36 / 0.14), 0 2px 12px rgb(28 32 36 / 0.14);
   --shadow-sheet:
-    0 12px 32px rgb(0 0 0 / 0.18), 0 2px 8px rgb(0 0 0 / 0.08);
+    0 20px 48px rgb(28 32 36 / 0.12), 0 0 0 1px rgb(28 32 36 / 0.08);
 }
 
-/* 过渡的派生参数。`--dc-collapse-ms` / `--dc-expand-ms` 由 `SidebarShell`
-   内联下发，这里只推出内容错峰的时长 —— 面板本身的宽高共用一个 clip-path，
-   不需要再拆分成不同轴向的时长和延时。 */
+/* 收束动画的派生参数：时长由 SidebarShell 内联下发。 */
 :root {
   --dc-ease: cubic-bezier(0.33, 0, 0.2, 1);
-
-  /* 内容错峰的时长：只占收束全程的一半，末尾的项才不会来不及收。 */
   --dc-converge-ms: calc(var(--dc-collapse-ms, 200ms) * 0.5);
 }
 
@@ -107,23 +92,24 @@
     background: transparent;
     overflow: hidden;
     font-family:
-      -apple-system, 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+      'Segoe UI Variable Text', 'Segoe UI', 'Microsoft YaHei UI',
+      'Microsoft YaHei', system-ui, sans-serif;
     color: var(--color-ink);
     -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
     /* 桌面启动器不需要文本选择和默认右键菜单。 */
     user-select: none;
     -webkit-user-select: none;
     cursor: default;
   }
 
-  /* 滚动条压到最细，避免遮挡玻璃面板的圆角与边缘高光。 */
   ::-webkit-scrollbar {
     width: var(--dc-spec-scrollbar-width);
     height: var(--dc-spec-scrollbar-width);
   }
 
   ::-webkit-scrollbar-thumb {
-    background: rgb(0 0 0 / 0.16);
+    background: rgb(28 32 36 / 0.2);
     border-radius: 2px;
   }
 
@@ -131,7 +117,6 @@
     background: transparent;
   }
 
-  /* 键盘可达性：仅在键盘聚焦时显示焦点环，鼠标点击不显示。 */
   :focus-visible {
     outline: 2px solid var(--color-focus);
     outline-offset: -1px;
@@ -140,9 +125,6 @@
 
 /* ---------------------------------------------------------------------------
  * 悬浮窗留白
- *
- * 窗口比侧栏本体多留一圈透明像素，CSS 的 box-shadow 才不会被窗口边界裁掉。
- * 展开态左侧保留设计稿的 2px 边距，收起态指示条贴左边缘（left: 0）。
  * ------------------------------------------------------------------------- */
 .dc-window-expanded {
   padding: var(--spacing-gutter) var(--spacing-gutter) var(--spacing-gutter)
@@ -153,8 +135,7 @@
   padding: var(--spacing-gutter) var(--spacing-gutter) var(--spacing-gutter) 0;
 }
 
-/* 容器查询上下文。侧栏内部所有 cqw 字号都以这个盒子的宽度为基准，
-   所以它必须比使用 cqw 的元素高一层（元素不能查询自身）。 */
+/* 容器查询上下文：侧栏内部所有 cqw 字号都以这个盒子的宽度为基准。 */
 .dc-container {
   container-type: inline-size;
   position: relative;
@@ -169,44 +150,881 @@
   scrollbar-width: thin;
 }
 
-/* 图标网格：自动换行，间距由令牌控制。 */
-.dc-grid {
-  display: flex;
-  flex-wrap: wrap;
-  align-content: flex-start;
-  gap: var(--spacing-grid-gap);
-}
-
-/* 拖拽缩放把手期间：指针会跑出面板，光靠 `preventDefault` 挡不住后续开始的
-   文本选择，直接在 body 上关掉。 */
 body.dc-resizing {
   user-select: none;
   -webkit-user-select: none;
 }
 
+/* ===========================================================================
+ * 面板：半透白釉 + 1px 墨线
+ * ========================================================================= */
+.dc-panel {
+  border-radius: var(--radius-panel);
+  background:
+    radial-gradient(120% 46% at 8% 0%, rgb(255 255 255 / 0.4), transparent 54%),
+    linear-gradient(
+      180deg,
+      rgb(253 254 255 / 0.84) 0%,
+      rgb(249 251 253 / 0.76) 100%
+    );
+  box-shadow: var(--shadow-panel);
+  -webkit-backdrop-filter: blur(var(--dc-spec-glass-blur)) saturate(1.04);
+  backdrop-filter: blur(var(--dc-spec-glass-blur)) saturate(1.04);
+}
+
+/* ===========================================================================
+ * 品牌栏
+ * ========================================================================= */
+.dc-brand {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 35px;
+  padding: 0 4.5%;
+  border-bottom: 1px solid var(--color-hairline);
+  background: linear-gradient(
+    180deg,
+    rgb(255 255 255 / 0.42),
+    rgb(255 255 255 / 0.12)
+  );
+}
+
+.dc-brand__mark {
+  flex: 0 0 auto;
+  width: 13px;
+  height: 13px;
+  color: var(--color-accent);
+}
+
+.dc-brand__word {
+  font-size: var(--text-word);
+  font-weight: 500;
+  letter-spacing: 0.28em;
+  color: var(--color-ink);
+  white-space: nowrap;
+  text-shadow: 0 1px 0 rgb(255 255 255 / 0.5);
+}
+
+.dc-brand__meta {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  margin-left: auto;
+  font-size: var(--text-eyebrow);
+  letter-spacing: 0.08em;
+  color: var(--color-ink-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.dc-brand__meta b {
+  font-size: var(--text-count);
+  font-weight: 600;
+  color: var(--color-accent);
+}
+
+.dc-brand__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: 6px;
+}
+
+/* ===========================================================================
+ * 搜索：一条下沉的输入槽
+ * ========================================================================= */
+.dc-search {
+  flex: 0 0 auto;
+  padding: 7px 4.5% 6px;
+}
+
+.dc-search__slot {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: clamp(29px, 8.8cqw, 33px);
+  padding: 0 8px 0 9px;
+  border: 1px solid var(--color-field-line);
+  border-radius: var(--radius-field);
+  background: var(--color-field);
+  box-shadow: var(--shadow-field);
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.dc-search__slot:focus-within {
+  border-color: rgb(47 93 140 / 0.55);
+  box-shadow:
+    0 0 0 2px var(--color-accent-soft),
+    var(--shadow-field);
+}
+
+.dc-search__icon {
+  flex: 0 0 auto;
+  width: 11px;
+  height: 11px;
+  color: var(--color-ink-faint);
+  transition: color 140ms ease;
+}
+
+.dc-search__slot:focus-within .dc-search__icon {
+  color: var(--color-accent);
+}
+
+.dc-search__input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--color-ink);
+  font-size: var(--text-field);
+  letter-spacing: 0.01em;
+}
+
+.dc-search__input::placeholder {
+  color: var(--color-ink-mute);
+}
+
+.dc-search__key {
+  flex: 0 0 auto;
+  padding: 1px 4px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 3px;
+  background: rgb(255 255 255 / 0.6);
+  color: var(--color-ink-faint);
+  font-size: var(--text-eyebrow);
+  letter-spacing: 0.03em;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
+.dc-search__clear {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--color-ink-mute);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.dc-search__clear:hover {
+  background: var(--color-hover);
+  color: var(--color-ink);
+}
+
+/* ===========================================================================
+ * 分类 / 分组行：虚线清单引导
+ * ========================================================================= */
+.dc-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding-right: 4.5%;
+  transition: background 120ms ease;
+}
+
+.dc-row:hover {
+  background: linear-gradient(90deg, var(--color-hover), transparent 88%);
+}
+
+.dc-row__main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 0 0 4.5%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dc-row--group .dc-row__main {
+  height: 28px;
+  padding-left: calc(4.5% + 15px);
+}
+
+.dc-row__label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: var(--text-cat);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--color-ink);
+  text-shadow: 0 1px 0 rgb(255 255 255 / 0.5);
+}
+
+.dc-row--group .dc-row__label {
+  font-size: var(--text-group);
+  font-weight: 500;
+  color: var(--color-ink-soft);
+  text-shadow: none;
+}
+
+.dc-row__leader {
+  flex: 1;
+  min-width: 14px;
+  margin: 0 6px 4px;
+  border-bottom: 1px dotted rgb(28 32 36 / 0.22);
+  transition: border-color 120ms ease;
+}
+
+.dc-row--group .dc-row__leader {
+  border-bottom-color: rgb(28 32 36 / 0.16);
+}
+
+.dc-row:hover .dc-row__leader {
+  border-bottom-color: rgb(28 32 36 / 0.34);
+}
+
+.dc-count {
+  flex: 0 0 auto;
+  font-size: var(--text-count);
+  color: var(--color-ink-mute);
+  font-variant-numeric: tabular-nums;
+}
+
+.dc-row__actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  margin-left: 4px;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.dc-row:hover .dc-row__actions,
+.dc-row:focus-within .dc-row__actions {
+  opacity: 1;
+}
+
+/* ===========================================================================
+ * 应用网格：自动填列 + 瓷白托盘
+ * ========================================================================= */
+.dc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(56px, 1fr));
+  gap: var(--spacing-grid-gap);
+  align-content: start;
+  padding: 3px 4.5% 7px;
+}
+
+.dc-app-icon {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  width: 100%;
+  min-width: 0;
+  padding: 2px 0 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  will-change: transform;
+}
+
+.dc-plate {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--spacing-icon-plate);
+  height: var(--spacing-icon-plate);
+  border: 1px solid rgb(28 32 36 / 0.12);
+  border-radius: var(--radius-plate);
+  background: linear-gradient(180deg, #fff, rgb(28 32 36 / 0.035));
+  box-shadow: var(--shadow-plate);
+  transition:
+    transform 120ms ease,
+    border-color 120ms ease,
+    background 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.dc-app-icon:hover .dc-plate {
+  transform: translateY(-1px);
+  border-color: rgb(28 32 36 / 0.2);
+}
+
+.dc-app-icon.is-selected .dc-plate {
+  border-color: rgb(47 93 140 / 0.45);
+  background: rgb(255 255 255 / 0.8);
+  box-shadow:
+    0 0 0 2px var(--color-accent-soft),
+    var(--shadow-plate);
+}
+
+.dc-app-glyph {
+  font-size: var(--text-glyph);
+  line-height: 1;
+}
+
+.dc-app-label {
+  width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-align: center;
+  font-size: var(--text-app);
+  line-height: 1.25;
+  letter-spacing: 0.01em;
+  color: var(--color-ink-mute);
+  text-shadow: 0 1px 0 rgb(255 255 255 / 0.5);
+}
+
+.dc-app-icon.is-selected .dc-app-label {
+  color: var(--color-ink);
+}
+
+/* ===========================================================================
+ * 空态
+ * ========================================================================= */
+.dc-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 26px 10% 30px;
+  text-align: center;
+}
+
+.dc-empty__mark {
+  width: 46px;
+  height: 46px;
+  margin-bottom: 4px;
+  color: var(--color-ink-faint);
+  opacity: 0.8;
+}
+
+.dc-empty__title {
+  margin: 0 0 4px;
+  font-size: var(--text-cat);
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.dc-empty__text {
+  margin: 0 0 12px;
+  font-size: var(--text-desc);
+  line-height: 1.6;
+  color: var(--color-ink-mute);
+}
+
+.dc-btn-ink {
+  height: 27px;
+  padding: 0 14px;
+  border: 1px solid var(--color-ink);
+  border-radius: 4px;
+  background: var(--color-ink);
+  color: #fff;
+  font-size: var(--text-desc);
+  cursor: pointer;
+  transition: filter 120ms ease;
+}
+
+.dc-btn-ink:hover {
+  filter: brightness(1.16);
+}
+
+/* ===========================================================================
+ * 底栏
+ * ========================================================================= */
+.dc-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 33px;
+  padding: 0 4.5%;
+  font-size: var(--text-desc);
+  border-top: 1px solid var(--color-hairline);
+  background: linear-gradient(
+    180deg,
+    rgb(250 253 255 / 0.42),
+    rgb(240 248 254 / 0.66)
+  );
+}
+
+.dc-foot__new {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-ink-mute);
+  font-size: var(--text-desc);
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+
+.dc-foot__new i {
+  font-style: normal;
+  color: var(--color-ink-faint);
+}
+
+.dc-foot__new:hover {
+  color: var(--color-ink);
+}
+
+.dc-foot__count {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  margin-left: auto;
+  font-size: var(--text-eyebrow);
+  color: var(--color-ink-faint);
+}
+
+.dc-foot__count b {
+  font-size: var(--text-count);
+  font-weight: 600;
+  color: var(--color-ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.dc-foot__count i {
+  font-style: normal;
+}
+
+/* ===========================================================================
+ * 设置页
+ * ========================================================================= */
+.dc-settings-scroll {
+  flex: 1;
+  min-height: 0;
+  padding: 2px 3% 12px;
+}
+
+.dc-eyebrow {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 12px 0 4px;
+  padding-left: 1px;
+  font-size: var(--text-desc);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: var(--color-ink);
+}
+
+.dc-eyebrow:first-child {
+  margin-top: 6px;
+}
+
+.dc-eyebrow span {
+  font-size: var(--text-eyebrow);
+  font-weight: 400;
+  letter-spacing: 0.14em;
+  color: var(--color-ink-faint);
+}
+
+.dc-setting {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 6px;
+  border: 0;
+  border-bottom: 1px solid var(--color-hairline-soft);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.dc-setting:hover {
+  background: var(--color-hover);
+}
+
+.dc-setting:last-child {
+  border-bottom-color: transparent;
+}
+
+.dc-setting__text {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dc-setting__text b {
+  font-size: var(--text-group);
+  font-weight: 500;
+  color: var(--color-ink);
+}
+
+.dc-setting__text small {
+  font-size: var(--text-desc);
+  line-height: 1.45;
+  color: var(--color-ink-mute);
+}
+
+.dc-setrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 6px;
+  border-bottom: 1px solid var(--color-hairline-soft);
+}
+
+.dc-setvalue {
+  flex: 0 0 auto;
+  font-size: var(--text-desc);
+  color: var(--color-ink-mute);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.dc-btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid rgb(28 32 36 / 0.14);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-ink-soft);
+  font-size: var(--text-desc);
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.dc-btn-ghost:hover {
+  background: var(--color-hover);
+  color: var(--color-ink);
+}
+
+.dc-keys {
+  margin: 0;
+  padding: 0 6px;
+}
+
+.dc-keys > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 25px;
+  border-bottom: 1px solid var(--color-hairline-soft);
+}
+
+.dc-keys > div:last-child {
+  border-bottom: 0;
+}
+
+.dc-keys dt {
+  font-size: var(--text-desc);
+  color: var(--color-ink-mute);
+}
+
+.dc-keys dd {
+  display: flex;
+  gap: 3px;
+  margin: 0;
+}
+
+.dc-kbd {
+  display: inline-block;
+  min-width: 16px;
+  padding: 1px 4px;
+  border: 1px solid var(--color-hairline);
+  border-radius: 3px;
+  background: rgb(255 255 255 / 0.65);
+  color: var(--color-ink-soft);
+  font-size: var(--text-eyebrow);
+  line-height: 1.4;
+  text-align: center;
+}
+
+.dc-about {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 6px;
+}
+
+.dc-about__mark {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  color: var(--color-accent);
+}
+
+.dc-about__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dc-about__text b {
+  font-size: var(--text-desc);
+  font-weight: 600;
+  color: var(--color-ink);
+}
+
+.dc-about__text small {
+  font-size: var(--text-desc);
+  color: var(--color-ink-mute);
+}
+
+.dc-settings-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  border-top: 1px solid var(--color-hairline);
+  background: rgb(255 255 255 / 0.35);
+  font-size: var(--text-eyebrow);
+  letter-spacing: 0.12em;
+  color: var(--color-ink-faint);
+}
+
+/* ===========================================================================
+ * 开关
+ * ========================================================================= */
+.dc-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 2.9em;
+  height: 1.5em;
+  border: 1px solid rgb(28 32 36 / 0.14);
+  border-radius: 999px;
+  background: rgb(28 32 36 / 0.12);
+  transition:
+    background 150ms ease,
+    border-color 150ms ease;
+}
+
+.dc-switch[data-on='true'] {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+}
+
+.dc-switch__thumb {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 1.1em;
+  height: 1.1em;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(28 32 36 / 0.22);
+  transition:
+    transform 150ms var(--dc-ease),
+    background 150ms ease;
+}
+
+.dc-switch[data-on='true'] .dc-switch__thumb {
+  transform: translateX(1.55em);
+}
+
+/* ===========================================================================
+ * 提示条
+ * ========================================================================= */
+.dc-notice {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin: 4px 4.5% 3px;
+  padding: 5px 7px 5px 10px;
+  border-radius: 4px;
+  background: rgb(28 32 36 / 0.035);
+  color: var(--color-ink-mute);
+  font-size: var(--text-desc);
+  line-height: 1.4;
+}
+
+.dc-notice::before {
+  content: '';
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 0;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--color-accent);
+}
+
+.dc-notice--error {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+
+.dc-notice--error::before {
+  background: var(--color-danger);
+}
+
+/* ===========================================================================
+ * 菜单与对话框
+ * ========================================================================= */
+.dc-sheet-border {
+  border: 1px solid rgb(28 32 36 / 0.12);
+}
+
+.dc-input {
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--color-field-line);
+  border-radius: 4px;
+  background: rgb(255 255 255 / 0.7);
+  color: var(--color-ink);
+  font-size: var(--text-field);
+  outline: none;
+  transition:
+    border-color 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.dc-input::placeholder {
+  color: var(--color-ink-faint);
+}
+
+.dc-input:focus {
+  border-color: rgb(47 93 140 / 0.55);
+  box-shadow: 0 0 0 2px var(--color-accent-soft);
+}
+
+.dc-input.is-invalid {
+  border-color: var(--color-danger);
+  background: var(--color-danger-soft);
+}
+
+.dc-dialog__eyebrow {
+  margin: 0 0 4px;
+  font-size: var(--text-eyebrow);
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  color: var(--color-accent);
+}
+
+.dc-btn {
+  height: 27px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-size: var(--text-desc);
+  cursor: pointer;
+  transition:
+    filter 120ms ease,
+    background 120ms ease,
+    color 120ms ease;
+}
+
+.dc-btn--ghost {
+  border-color: var(--color-hairline);
+  background: transparent;
+  color: var(--color-ink-soft);
+}
+
+.dc-btn--ghost:hover {
+  background: var(--color-hover);
+  color: var(--color-ink);
+}
+
+.dc-btn--primary {
+  background: var(--color-ink);
+  color: #fff;
+}
+
+.dc-btn--primary:hover {
+  filter: brightness(1.18);
+}
+
+.dc-btn--danger {
+  background: var(--color-danger);
+  color: #fff;
+}
+
+.dc-btn--danger:hover {
+  filter: brightness(1.08);
+}
+
+.dc-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ===========================================================================
+ * 收起指示条
+ * ========================================================================= */
+.dc-strip {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--radius-strip);
+  background: linear-gradient(180deg, #fff, #eef1f4);
+  box-shadow: var(--shadow-strip);
+  cursor: pointer;
+  transition: filter 150ms ease;
+}
+
+.dc-strip:hover {
+  filter: brightness(1.02);
+}
+
+.dc-strip__latch {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 100%;
+  height: 12px;
+  border-radius: 1px;
+  background: var(--color-accent);
+  transform: translate(-50%, -50%);
+}
+
+/* ===========================================================================
+ * 浏览器预览场景（仅开发用）
+ * ========================================================================= */
+.dc-devscene {
+  background:
+    radial-gradient(60% 40% at 78% 12%, rgb(232 178 58 / 0.18), transparent 62%),
+    radial-gradient(52% 38% at 12% 88%, rgb(47 93 140 / 0.16), transparent 64%),
+    linear-gradient(160deg, #f4f7f9 0%, #e8edf2 58%, #d9e1e8 100%);
+}
+
+.dc-devscene__badge {
+  border: 1px solid rgb(28 32 36 / 0.1);
+  background: rgb(255 255 255 / 0.72);
+  color: var(--color-ink-mute);
+  box-shadow: 0 8px 20px rgb(28 32 36 / 0.08);
+  backdrop-filter: blur(10px);
+}
+
 /* ---------------------------------------------------------------------------
  * 收起 / 展开过渡：展开态「收束」成一条细丝
- *
- * 窗口是瞬间改尺寸的（`set_size` 一下就变成 19×112），所以动画必须在**窗口
- * 还是大尺寸的时候**播完：`clip-path` 把可见区域同时向左侧 3px、向上方 80px
- * 收，落点正好是收起态指示条的位置和大小，之后窗口一缩、指示条接管，视觉上
- * 是连续的。
- *
- * 用 `clip-path` 而不是 `width/height`：前者只裁剪、不触发重排，60fps 下不会
- * 因为每帧重排整个侧栏而掉帧，内容也天然被「挤掉」而不是被挤变形。
- *
- * **宽高必须同时变。** 曾经拆成两层、让横向先收纵向后收，实测观感是「先塌成
- * 一条竖线、再缩到 80px」的两段式，很别扭 —— 面板是一整块，收就得整块一起收。
- * 因此这里只有一层 clip-path，四个 inset 一起过渡，延时一律为 0。
- *
- * 时长由 JS 下发的 `--dc-collapse-ms` / `--dc-expand-ms` 决定，改那两个值即可
- * 整体调速。
  * ------------------------------------------------------------------------- */
 .dc-stage {
   position: relative;
   width: 100%;
   height: 100%;
-  /* 展开（无 --converged）时的目标状态，也是它的过渡参数。 */
   clip-path: inset(0 0 0 0 round 10px);
   background-color: transparent;
   transition:
@@ -215,17 +1033,17 @@ body.dc-resizing {
 }
 
 .dc-stage--converged {
-  /* 收起时的目标状态：只剩左上角 3×80 一条，正好是收起态指示条的形状。 */
-  clip-path: inset(0 calc(100% - var(--spacing-strip-w)) calc(100% - var(--spacing-strip-h)) 0 round var(--radius-strip));
-  /* 顺带把背景提亮到指示条的柔白，窗口缩小交给指示条时看不出换手。 */
-  background-color: rgb(255 255 255 / 0.6);
+  clip-path: inset(
+    0 calc(100% - var(--spacing-strip-w)) calc(100% - var(--spacing-strip-h)) 0
+      round var(--radius-strip)
+  );
+  background-color: var(--color-strip);
   transition:
     clip-path var(--dc-collapse-ms) var(--dc-ease),
     background-color var(--dc-collapse-ms) linear;
 }
 
-/* 面板内容错峰左收：分类按顺序依次被「抽走」，最后只剩那条细丝。
-   延时封顶 80ms —— 分类多了后期项会拖到收束结束之后，窗口一缩就露馅。 */
+/* 面板内容错峰左收：分类按顺序依次被「抽走」，最后只剩那条细丝。 */
 .dc-converge {
   --dc-converge-delay: min(80ms, max(0ms, calc(var(--dc-i, 0) * 14ms)));
 
@@ -240,7 +1058,7 @@ body.dc-resizing {
   transform: translateX(-6%);
 }
 
-/* 收束时自上而下扫过的光带：像把面板里的光抽进那条细丝里。 */
+/* 收束时自上而下扫过的光带。 */
 .dc-sweep {
   position: absolute;
   left: 0;
@@ -277,31 +1095,26 @@ body.dc-resizing {
 }
 
 /* ---------------------------------------------------------------------------
- * 应用图标的拖拽换位
- *
- * 落点提示画在被瞄准图标的**边缘**（一条竖线），而不是整块高亮 —— 整块高亮会
- * 让人分不清是「要选中它」还是「要插到它旁边」。颜色与根节点之间的插入分界线
- * 一致，保持同一套视觉语言。
+ * 拖拽换位提示
  * ------------------------------------------------------------------------- */
 .dc-app-icon.dc-drop-before::before,
 .dc-app-icon.dc-drop-after::after {
   content: '';
   position: absolute;
-  top: 0;
-  bottom: 0;
+  top: 4px;
+  bottom: 4px;
   width: 2px;
   border-radius: 1px;
   background-color: var(--color-drop-active);
 }
 
 .dc-app-icon.dc-drop-before::before {
-  left: -4px;
+  left: -3px;
 }
 .dc-app-icon.dc-drop-after::after {
-  right: -4px;
+  right: -3px;
 }
 
-/* 分组行作为节点排序的目标时，用横线表达插入到它的前面或后面。 */
 .dc-drop-node-before::before,
 .dc-drop-node-after::after {
   content: '';
@@ -321,15 +1134,8 @@ body.dc-resizing {
   bottom: -2px;
 }
 
-/* 拖拽期间给分类行一个可放置的底色，明确「松手会进这个分类」。 */
 .dc-drop-zone {
-  background-color: rgb(58 96 190 / 0.08);
-}
-
-/* 换位后的重排动画由 Web Animations API 驱动（见 useReorderAnimation），
-   这里只保证图标本身有 transform 可动画。 */
-.dc-app-icon {
-  will-change: transform;
+  background-color: rgb(47 93 140 / 0.08);
 }
 
 /* 单行文本省略。 */

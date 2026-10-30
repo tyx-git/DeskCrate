@@ -22,9 +22,10 @@ export function CollapsedStrip() {
       aria-label="展开 DeskCrate 侧栏"
       title="展开 DeskCrate 侧栏"
       onClick={() => void setViewMode('expanded')}
-      className="relative h-full w-full rounded-strip bg-strip shadow-strip transition-colors duration-150 hover:bg-[rgb(255_255_255_/_0.9)] active:bg-white"
+      className="dc-strip"
     >
-      <span aria-hidden className="absolute inset-y-0 left-0 -right-gutter" />
+      <span aria-hidden className="absolute inset-y-0 -right-gutter left-0" />
+      <span aria-hidden className="dc-strip__latch" />
     </button>
   )
 }

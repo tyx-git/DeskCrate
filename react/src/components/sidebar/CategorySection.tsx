@@ -56,18 +56,12 @@ export function CategorySection({ category, index }: CategorySectionProps) {
         onDrop={(event) => drag.onDropOnContainer(event, category.id)}
         onToggle={() => toggleCollapse(category.id, !category.isCollapsed)}
         onContextMenu={(event) => contextMenuForNode(event, location)}
-        trailing={
-          category.isCollapsed && countApps(category.groups) > 0 ? (
-            <span className="shrink-0 rounded-chip bg-chip px-[5px] py-[1px] text-chip text-chip-ink">
-              {countApps(category.groups)}
-            </span>
-          ) : null
-        }
+        trailing={<span className="dc-count">{countApps(category.groups)}</span>}
         actions={
           <IconButton
             label={`在「${category.name}」中添加应用`}
             onClick={() => addAppTo(location)}
-            className="text-caret hover:text-ink"
+            className="text-ink-faint hover:text-ink"
           >
             +
           </IconButton>

@@ -28,7 +28,7 @@ export function AppGrid({ apps, parentId = null }: AppGridProps) {
 
   return (
     <div
-      className="dc-grid px-[5%] pt-[2%] pb-[1%]"
+      className="dc-grid"
       onDragOver={(event) => {
         // 只有正在拖动应用时，空白处才表示追加到该容器末尾。
         if (draggingNode?.kind !== 'app') return

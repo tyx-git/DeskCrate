@@ -96,16 +96,12 @@ export function ItemList({ items, depth, parentId, parentKind }: ItemListProps) 
               dropPosition={dropHint?.nodeId === group.id ? dropHint.position : null}
               onToggle={() => toggleCollapse(group.id, !group.isCollapsed)}
               onContextMenu={(event) => contextMenuForNode(event, location)}
-              trailing={
-                <span className="shrink-0 rounded-chip bg-chip px-[5px] py-[1px] text-chip text-chip-ink">
-                  {countApps(group.children)}
-                </span>
-              }
+              trailing={<span className="dc-count">{countApps(group.children)}</span>}
               actions={
                 <IconButton
                   label={`在「${group.name}」中添加应用`}
                   onClick={() => addAppTo(location)}
-                  className="text-caret hover:text-ink"
+                  className="text-ink-faint hover:text-ink"
                 >
                   +
                 </IconButton>
