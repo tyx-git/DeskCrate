@@ -10,9 +10,6 @@
   </p>
 </div>
 
-![DeskCrate 侧栏](images/1790406503307.png)
-![DeskCrate 侧栏](images/1790406569976.png)
-
 ## 项目简介
 
 DeskCrate 是一个面向 Windows 的桌面启动器。它以透明、无边框的悬浮侧栏承载分类、分组和应用入口，支持从键盘、鼠标和文件拖放快速整理日常工作环境。
@@ -202,7 +199,6 @@ DeskCrate/
 │  │  ├─ system/             Windows 系统集成
 │  │  └─ models/             数据与请求模型
 │  └─ tests/                 Rust 集成测试
-├─ docs/assets/              README 展示截图
 └─ README.md
 ```
 
