@@ -1,119 +1,183 @@
+// 面板内交互状态：搜索、菜单、对话框、设置、通知与拖拽标记。
 import { create } from 'zustand'
 
-import type { NodeLocation } from '../lib/tree'
+import type { GlyphName } from '../components/Glyph'
 
-/** 对话框种类。每种对应一组字段和一个提交动作。 */
-export type DialogKind = 'new-category' | 'new-group' | 'add-app' | 'rename' | 'confirm'
+export type DialogState =
+  | { mode: 'add'; source?: string; name?: string; parentId?: string; rootIndex?: number }
+  | { mode: 'new-category' }
+  | { mode: 'new-group'; parentId: string }
+  | { mode: 'rename-app'; id: string }
+  | { mode: 'delete-node'; id: string }
 
-export interface DialogState {
-  kind: DialogKind
-  /** 操作目标节点的 ID；新建分类时为空。 */
-  targetId?: string
-  /** 操作目标节点的展示名称，用于对话框标题。 */
-  targetName?: string
-  /** 输入框初始值。 */
-  initialValue?: string
-  /** `confirm` 类型对话框的正文。 */
-  message?: string
-  /** `confirm` 类型对话框的确认按钮文案。 */
-  confirmLabel?: string
-  /** `confirm` 类型对话框点确认后执行的动作。 */
-  onConfirm?: () => void
+export type CtxTargetType = 'app' | 'Category' | 'Group' | 'blank'
+
+export interface CtxState {
+  type: CtxTargetType
+  id: string
+  clientX: number
+  clientY: number
+  /** 非空表示菜单已钻入「移动到…」子页。 */
+  moveAppId?: string
 }
 
-export interface ContextMenuState {
-  /** 相对于窗口客户区的坐标。 */
-  x: number
-  y: number
-  /** 右键命中的节点；在空白处右键时为 null，表示「新建分类」。 */
-  target: NodeLocation | null
-}
-
-export interface Notice {
+export interface Toast {
   id: number
-  kind: 'error' | 'info'
-  message: string
+  text: string
+  icon: GlyphName
+  danger: boolean
+  actionLabel?: string
+  onAction?: () => void
+  duration: number
+  leaving: boolean
 }
 
-export type DraggedNode = { id: string; kind: 'app' | 'group' }
-
-/** 节点拖拽时的落点提示：插到目标节点前面或后面。 */
-export interface DropHint {
-  nodeId: string
-  position: 'before' | 'after'
+export interface ToastOptions {
+  icon?: GlyphName
+  danger?: boolean
+  actionLabel?: string
+  onAction?: () => void
+  duration?: number
 }
+
+/** 拖拽中的节点；分类不支持拖拽（后端无根级重排命令）。 */
+export interface DragState {
+  kind: 'app' | 'Group'
+  id: string
+}
+
+/** 落点高亮标记，由拖拽计算写入、各节点据此渲染插入线/容器高亮。 */
+export type DropMark =
+  | { kind: 'app'; id: string; side: 'before' | 'after' }
+  | { kind: 'node'; id: string; side: 'before' | 'after' }
+  | { kind: 'row'; id: string }
+  | { kind: 'grid'; containerId: string; mode: 'into' | 'before' | 'after' }
 
 interface UiState {
-  /** 搜索关键词。 */
   query: string
-  /** 键盘导航当前选中的应用 ID。 */
-  selectedAppId: string | null
-  contextMenu: ContextMenuState | null
+  activeResult: number
   dialog: DialogState | null
-  notice: Notice | null
-
-  /** 当前被拖拽的应用或分组；没有拖拽时为 null。 */
-  draggingNode: DraggedNode | null
-  /** 当前悬停的落点。 */
-  dropHint: DropHint | null
-  /**
-   * 设置页是否打开。
-   *
-   * 打开时侧栏主体换成设置页（同一个面板内切换），而不是再叠一层弹窗 —— 侧栏
-   * 只有 338px 宽，套一层模态会把内容挤得没法看。
-   */
+  ctx: CtxState | null
   settingsOpen: boolean
+  toasts: Toast[]
+  drag: DragState | null
+  dropMark: DropMark | null
+  renamingId: string | null
+  launchingId: string | null
+  sizeBadge: string | null
+  fileDragging: boolean
 
   setQuery: (query: string) => void
-  setSelectedAppId: (id: string | null) => void
-  openContextMenu: (menu: ContextMenuState) => void
-  closeContextMenu: () => void
+  setActiveResult: (index: number) => void
   openDialog: (dialog: DialogState) => void
   closeDialog: () => void
-  notify: (kind: Notice['kind'], message: string) => void
-  dismissNotice: () => void
-  setDraggingNode: (node: DraggedNode | null) => void
-  setDropHint: (hint: DropHint | null) => void
-  setSettingsOpen: (open: boolean) => void
+  openCtx: (type: CtxTargetType, id: string, clientX: number, clientY: number) => void
+  openMoveMenu: (appId: string) => void
+  closeCtx: () => void
+  openSettings: () => void
+  closeSettings: () => void
+  pushToast: (text: string, options?: ToastOptions) => number
+  notify: (kind: 'error' | 'info' | 'success', text: string) => void
+  dismissToast: (id: number) => void
+  startDrag: (drag: DragState) => void
+  setDropMark: (mark: DropMark | null) => void
+  endDrag: () => void
+  startRename: (id: string) => void
+  endRename: () => void
+  setLaunching: (id: string | null) => void
+  setSizeBadge: (text: string | null) => void
+  setFileDragging: (value: boolean) => void
 }
 
-let noticeSeq = 0
-let noticeTimer: number | undefined
+let toastSeq = 0
+const toastTimers = new Map<number, number>()
+const MAX_TOASTS = 3
 
-export const useUiStore = create<UiState>((set) => ({
+export const useUiStore = create<UiState>((set, get) => ({
   query: '',
-  selectedAppId: null,
-  contextMenu: null,
+  activeResult: 0,
   dialog: null,
-  notice: null,
-  draggingNode: null,
-  dropHint: null,
+  ctx: null,
   settingsOpen: false,
+  toasts: [],
+  drag: null,
+  dropMark: null,
+  renamingId: null,
+  launchingId: null,
+  sizeBadge: null,
+  fileDragging: false,
 
-  setQuery: (query) => set({ query, selectedAppId: null }),
-  setSelectedAppId: (selectedAppId) => set({ selectedAppId }),
-  openContextMenu: (contextMenu) => set({ contextMenu, dialog: null }),
-  closeContextMenu: () => set({ contextMenu: null }),
-  openDialog: (dialog) => set({ dialog, contextMenu: null }),
+  setQuery: (query) => set({ query, activeResult: 0 }),
+  setActiveResult: (activeResult) => set({ activeResult }),
 
+  openDialog: (dialog) => set({ dialog, ctx: null }),
   closeDialog: () => set({ dialog: null }),
 
-  notify: (kind, message) => {
-    // 后到的提示覆盖前一条，避免错误堆叠把侧栏顶出可视区。
-    window.clearTimeout(noticeTimer)
-    const notice: Notice = { id: (noticeSeq += 1), kind, message }
-    set({ notice })
-    noticeTimer = window.setTimeout(() => set({ notice: null }), 6000)
+  openCtx: (type, id, clientX, clientY) => set({ ctx: { type, id, clientX, clientY } }),
+  openMoveMenu: (appId) => {
+    const ctx = get().ctx
+    if (ctx) set({ ctx: { ...ctx, moveAppId: appId } })
+  },
+  closeCtx: () => set({ ctx: null }),
+
+  openSettings: () => set({ settingsOpen: true, ctx: null }),
+  closeSettings: () => set({ settingsOpen: false }),
+
+  pushToast: (text, options = {}) => {
+    const id = ++toastSeq
+    const toast: Toast = {
+      id,
+      text,
+      icon: options.icon ?? 'check',
+      danger: options.danger ?? false,
+      actionLabel: options.actionLabel,
+      onAction: options.onAction,
+      duration: options.duration ?? (options.actionLabel ? 6000 : 3600),
+      leaving: false,
+    }
+    set((state) => {
+      const kept = state.toasts.filter((t) => !t.leaving)
+      const overflow = kept.slice(0, Math.max(0, kept.length - (MAX_TOASTS - 1)))
+      for (const old of overflow) {
+        const timer = toastTimers.get(old.id)
+        if (timer) window.clearTimeout(timer)
+        toastTimers.delete(old.id)
+      }
+      const next = [...kept, toast].slice(-MAX_TOASTS)
+      return { toasts: next }
+    })
+    const timer = window.setTimeout(() => get().dismissToast(id), toast.duration)
+    toastTimers.set(id, timer)
+    return id
   },
 
-  dismissNotice: () => {
-    window.clearTimeout(noticeTimer)
-    set({ notice: null })
+  notify: (kind, text) => {
+    get().pushToast(text, {
+      icon: kind === 'error' ? 'alert' : kind === 'success' ? 'check' : 'check',
+      danger: kind === 'error',
+    })
   },
 
-  setDraggingNode: (draggingNode) => set({ draggingNode, dropHint: null }),
-  setDropHint: (dropHint) => set({ dropHint }),
-  // 打开设置页时顺手收掉右键菜单和对话框，避免两层浮层叠在一起。
-  setSettingsOpen: (settingsOpen) =>
-    set(settingsOpen ? { settingsOpen, contextMenu: null, dialog: null } : { settingsOpen }),
+  dismissToast: (id) => {
+    const timer = toastTimers.get(id)
+    if (timer) window.clearTimeout(timer)
+    toastTimers.delete(id)
+    set((state) => ({
+      toasts: state.toasts.map((t) => (t.id === id ? { ...t, leaving: true } : t)),
+    }))
+    window.setTimeout(() => {
+      set((state) => ({ toasts: state.toasts.filter((t) => t.id !== id) }))
+    }, 180)
+  },
+
+  startDrag: (drag) => set({ drag, dropMark: null, ctx: null }),
+  setDropMark: (dropMark) => set({ dropMark }),
+  endDrag: () => set({ drag: null, dropMark: null }),
+
+  startRename: (renamingId) => set({ renamingId, ctx: null }),
+  endRename: () => set({ renamingId: null }),
+
+  setLaunching: (launchingId) => set({ launchingId }),
+  setSizeBadge: (sizeBadge) => set({ sizeBadge }),
+  setFileDragging: (fileDragging) => set({ fileDragging }),
 }))

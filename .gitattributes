@@ -1,0 +1,2 @@
+# Text files are UTF-8 with LF; Git auto-detects binary assets.
+* text=auto eol=lf

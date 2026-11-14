@@ -1,7 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 14 14" role="img" aria-label="DeskCrate">
-  <title>DeskCrate</title>
-  <rect x="0.9" y="0.9" width="5.4" height="5.4" fill="#2f5d8c" />
-  <rect x="7.7" y="0.9" width="5.4" height="5.4" fill="none" stroke="#2f5d8c" stroke-width="1.6" />
-  <rect x="0.9" y="7.7" width="5.4" height="5.4" fill="none" stroke="#2f5d8c" stroke-width="1.6" />
-  <rect x="7.7" y="7.7" width="5.4" height="5.4" fill="#2f5d8c" />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 14 14">
+  <rect x="0.9" y="0.9" width="5.4" height="5.4" fill="#2c6e5f"/>
+  <rect x="7.7" y="0.9" width="5.4" height="5.4" fill="none" stroke="#2c6e5f" stroke-width="1.6"/>
+  <rect x="0.9" y="7.7" width="5.4" height="5.4" fill="none" stroke="#2c6e5f" stroke-width="1.6"/>
+  <rect x="7.7" y="7.7" width="5.4" height="5.4" fill="#2c6e5f"/>
 </svg>

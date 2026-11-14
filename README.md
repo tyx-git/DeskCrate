@@ -67,8 +67,8 @@ flowchart LR
 | 层 | 目录 | 主要职责 |
 |---|---|---|
 | 前端 | `react/src/components` | 侧栏、设置页、菜单、对话框和交互反馈 |
-| 状态 | `react/src/state` | Zustand 状态、乐观更新和前后端同步 |
-| API | `react/src/api` | Tauri 后端与浏览器 mock 后端的统一接口 |
+| 状态 | `react/src/state` | Zustand 状态、命令后回读和设置项同步 |
+| API | `react/src/api` | 类型化 Tauri 命令客户端与运行时判定 |
 | Command | `src-tauri/src/commands` | Tauri IPC 边界、参数组装和事件派发 |
 | Service | `src-tauri/src/services` | 目录树、设置、窗口、图标等业务流程 |
 | Storage | `src-tauri/src/storage` | JSON 读取、校验、迁移和原子替换 |
@@ -83,7 +83,7 @@ flowchart LR
 | 后端 | Rust 2021、Serde、Chrono、UUID |
 | Windows 集成 | `windows` 0.58、COM、Shell、GDI、WinHTTP |
 | 前端 | React 19、TypeScript 6、Vite 8 |
-| 样式 | Tailwind CSS 4、容器查询单位 `cqw` |
+| 样式 | 纯 CSS（设计令牌 + 容器查询单位 `cqw`） |
 | 状态管理 | Zustand 5 |
 | 图像处理 | `image` 0.25 |
 | 数据存储 | Pretty JSON、同目录临时文件、原子替换 |
@@ -166,7 +166,7 @@ HKCU\Software\Microsoft\Windows\CurrentVersion\Run\DeskCrate
 
 ## 后端 Command
 
-前端通过 `react/src/api/backend.ts` 定义的统一接口访问后端；Tauri 环境使用真实 Command，浏览器环境使用 mock 实现。
+前端通过 `react/src/api/backend.ts` 定义的统一接口访问后端；Tauri 运行时使用真实 Command，浏览器预览会提示不在应用窗口内（无 mock 回退）。
 
 | 接口组 | Command |
 |---|---|
@@ -185,10 +185,10 @@ HKCU\Software\Microsoft\Windows\CurrentVersion\Run\DeskCrate
 DeskCrate/
 ├─ react/                    React + TypeScript 前端
 │  └─ src/
-│     ├─ api/                Tauri/mock 后端抽象
+│     ├─ api/                类型化 Tauri 命令客户端
 │     ├─ components/         侧栏、设置页、菜单和对话框
-│     ├─ hooks/              自动收起、快捷键、文件拖放
-│     ├─ lib/                树操作、窗口几何等纯逻辑
+│     ├─ hooks/              自动收起、快捷键、文件拖放、窗口缩放
+│     ├─ lib/                只读树查询、落点规划、窗口缩放几何、启动状态机
 │     ├─ state/              Zustand stores
 │     └─ types/              前端模型契约
 ├─ src-tauri/
@@ -211,6 +211,12 @@ DeskCrate/
 - 项目地址：<https://gitee.com/tian-someone/DeskCrate.git>
 
 提交 Issue 时请包含复现步骤、预期行为、实际行为、Windows 版本和相关日志。涉及模型、Command 或持久化格式的改动，请同时补充对应测试。
+
+### 编码约定
+
+- 所有文档与文本文件统一使用 UTF-8 编码（无 BOM）。
+- 换行统一为 LF；`.editorconfig` 与 `.gitattributes` 已做约束。
+- 图片、图标、压缩包等二进制资源不要做文本转码。
 
 ## 作者与版本
 

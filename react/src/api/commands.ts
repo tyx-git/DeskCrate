@@ -1,15 +1,16 @@
-// Tauri Command 名称集中管理，避免 adapter 和业务代码散落字符串字面量。
+// Tauri Command 名称集中管理，避免散落字符串字面量。
 export const COMMANDS = {
   getWindowInit: 'is_init',
   applyViewMode: 'apply_view_mode',
+  resizeWindow: 'resize_window',
+  finishWindowResize: 'finish_window_resize',
   getSettings: 'get_settings',
   updateSettings: 'update_settings',
   updateAutoCollapse: 'update_auto_collapse',
   updateAutoStart: 'update_auto_start',
   updateTheme: 'update_theme',
   clearWindowSizeOverride: 'clear_window_size_override',
-  resizeWindow: 'resize_window',
-  finishWindowResize: 'finish_window_resize',
+  probeUrlIcon: 'probe_url_icon',
   getAllData: 'get_all_data',
   addCategory: 'add_category',
   renameCategory: 'rename_category',

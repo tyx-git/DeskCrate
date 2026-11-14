@@ -1,19 +1,21 @@
-import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import tailwindcss from '@tailwindcss/vite'
+import { defineConfig } from 'vitest/config'
 
-// Tauri 通过 devUrl 固定访问 5173，因此这里显式锁定端口，
-// 避免端口被占用时 Vite 自动换端口导致 Tauri 一直等待。
+// Tauri 通过 devUrl 固定访问 5173，端口被占用时直接报错而不是自动换端口，
+// 否则 Tauri 会一直等待一个不存在的开发服务器。
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react()],
   clearScreen: false,
   server: {
     port: 5173,
     strictPort: true,
   },
   build: {
-    // WebView2 基于 Chromium，可以直接使用现代语法，不必为旧浏览器降级。
+    // WebView2 基于 Chromium，直接使用现代语法，不为旧浏览器降级。
     target: 'chrome105',
     sourcemap: false,
+  },
+  test: {
+    include: ['tests/**/*.test.ts'],
   },
 })
