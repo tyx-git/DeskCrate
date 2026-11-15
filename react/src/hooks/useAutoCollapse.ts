@@ -1,12 +1,12 @@
-// 自动收起：鼠标离开面板 700ms 后收为指示条，悬停指示条 120ms 后展开。
+// 自动收起：鼠标离开面板 300ms 后收为指示条，悬停指示条 100ms 后展开。
 // 监听挂在面板而非窗口上——窗口四周有 16px 透明阴影留白，不该触发悬停。
 import { useEffect, type RefObject } from 'react'
 
 import { useSettingsStore } from '../state/settingsStore'
 import { useUiStore } from '../state/uiStore'
 
-const LEAVE_MS = 700
-const HOVER_MS = 120
+const LEAVE_MS = 400
+const HOVER_MS = 100
 
 export function useAutoCollapse(panelRef: RefObject<HTMLElement | null>): void {
   useEffect(() => {

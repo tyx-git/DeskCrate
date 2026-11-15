@@ -40,9 +40,9 @@ export interface ToastOptions {
   duration?: number
 }
 
-/** 拖拽中的节点；分类不支持拖拽（后端无根级重排命令）。 */
+/** 拖拽中的节点：应用、分组、顶层分类。 */
 export interface DragState {
-  kind: 'app' | 'Group'
+  kind: 'app' | 'Group' | 'Category'
   id: string
 }
 

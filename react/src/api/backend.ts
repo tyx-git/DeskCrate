@@ -1,5 +1,6 @@
 // 前端用到的全部后端能力，与 src-tauri 的命令一一对应。
 import type { AddAppsResponse, AppData, AppEXE, Category, Group } from '../types/catalog'
+import type { DropTarget } from '../types/drop'
 import type { Settings, Theme, ViewMode, WindowGeometry, WindowInitResponse } from '../types/settings'
 
 /** 系统文件拖入事件；position 为原生物理像素。 */
@@ -65,6 +66,12 @@ export interface Backend {
   moveApp(id: string, parentId: string | null, beforeId: string | null): Promise<void>
   /** 分组只允许在原父容器内同级重排。 */
   moveGroup(id: string, parentId: string, beforeId: string | null): Promise<void>
+  /** 拖拽应用；后端根据落点完成删/插与根下标校正。 */
+  dropApp(id: string, target: DropTarget): Promise<void>
+  /** 拖拽分组；后端只允许同父级重排。 */
+  dropGroup(id: string, target: DropTarget): Promise<void>
+  /** 拖拽分类；后端完成根列表重排。 */
+  dropCategory(id: string, target: DropTarget): Promise<void>
   renameApp(id: string, name: string): Promise<AppEXE>
   deleteApp(id: string): Promise<void>
   launchIcon(id: string): Promise<void>

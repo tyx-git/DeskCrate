@@ -2,8 +2,8 @@ use crate::{
     error::AppResult,
     models::{
         AddAppRequest, AddAppsRequest, AddAppsResponse, AddCategoryRequest, AddGroupRequest,
-        AppData, AppEXE, Category, DeleteRequest, Group, MoveAppRequest, MoveGroupRequest,
-        RenameRequest, SetNodeCollapsedRequest,
+        AppData, AppEXE, Category, DeleteRequest, DropTarget, Group, MoveAppRequest,
+        MoveGroupRequest, RenameRequest, SetNodeCollapsedRequest,
     },
     services,
     state::AppState,
@@ -182,6 +182,36 @@ pub fn move_group(
             before_id,
         },
     )
+}
+
+// 拖拽应用：前端只传 DOM 命中结果，后端计算最终插入位置。
+#[tauri::command]
+pub fn drop_app(
+    id: String,
+    target: DropTarget,
+    state: tauri::State<'_, AppState>,
+) -> AppResult<()> {
+    services::catalog::drop_app(state.inner(), id, target)
+}
+
+// 拖拽分组：只允许同父级重排。
+#[tauri::command]
+pub fn drop_group(
+    id: String,
+    target: DropTarget,
+    state: tauri::State<'_, AppState>,
+) -> AppResult<()> {
+    services::catalog::drop_group(state.inner(), id, target)
+}
+
+// 拖拽分类：只允许根列表重排。
+#[tauri::command]
+pub fn drop_category(
+    id: String,
+    target: DropTarget,
+    state: tauri::State<'_, AppState>,
+) -> AppResult<()> {
+    services::catalog::drop_category(state.inner(), id, target)
 }
 
 // 按ID重命名应用，并返回更新后的应用对象。

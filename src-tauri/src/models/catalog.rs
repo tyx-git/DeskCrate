@@ -106,6 +106,41 @@ pub struct MoveGroupRequest {
     pub before_id: Option<String>,
 }
 
+// 拖拽落点相对于目标节点的位置。
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum DropSide {
+    Before,
+    After,
+}
+
+// 拖拽落点。
+//
+// 前端只负责判断指针命中了哪个 DOM 节点，真正的「先摘后插」「是否跳过自身」
+// 「顶层行被删后下标如何校正」都由后端完成。
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum DropTarget {
+    // 放到某个应用之前/之后。
+    App {
+        id: String,
+        side: DropSide,
+    },
+    // 追加到分类/分组；分组拖拽时 `side` 表示放在同级分组的之前/之后。
+    Container {
+        id: String,
+        #[serde(default)]
+        side: Option<DropSide>,
+    },
+    // 放到第 `index` 个根节点之前/之后。
+    Root {
+        index: usize,
+        side: DropSide,
+    },
+    // 追加到根列表末尾。
+    RootEnd,
+}
+
 // 新增子分组时由前端提交的请求数据。
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]

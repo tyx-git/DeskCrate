@@ -171,6 +171,7 @@ svg { display: block; }
 .plate.is-pending > svg { color: var(--ink-faint); animation: pending 1.2s ease-in-out infinite; }
 @keyframes pending { 0%, 100% { opacity: 0.45; } 50% { opacity: 0.9; } }
 .app.is-dragging { opacity: 0.35; }
+.row.is-dragging { opacity: 0.35; }
 
 /* 搜索结果 */
 .results { padding-top: 4px; }

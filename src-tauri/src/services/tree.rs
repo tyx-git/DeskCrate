@@ -122,6 +122,70 @@ pub(crate) fn insert_root_app(data: &mut AppData, app: AppEXE, index: usize) {
     data.items.insert(index, RootItem::Apps(vec![app]));
 }
 
+// 在指定节点之后插入一个同级节点。
+//
+// `before_id` 版本只能表达「插到参照之前」，而拖拽落在参照节点的后半区时
+// 需要「插到参照之后」。顶层应用行没有节点 ID，因此这里分别处理根行与容器。
+pub(crate) fn insert_after_node(data: &mut AppData, target_id: &str, node: Item) -> bool {
+    for item in data.items.iter_mut() {
+        if let RootItem::Apps(apps) = item {
+            if let Some(position) = apps.iter().position(|app| app.id == target_id) {
+                if let Item::App(app) = node {
+                    apps.insert(position + 1, app);
+                    return true;
+                }
+                return false;
+            }
+        }
+    }
+
+    for item in data.items.iter_mut() {
+        if let RootItem::Category(category) = item {
+            if insert_after_in_items(&mut category.groups, target_id, node.clone()) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+fn insert_after_in_items(items: &mut Vec<Item>, target_id: &str, node: Item) -> bool {
+    if let Some(position) = items.iter().position(|item| item_id(item) == target_id) {
+        items.insert(position + 1, node);
+        return true;
+    }
+
+    for item in items.iter_mut() {
+        if let Item::Group(group) = item {
+            if insert_after_in_items(&mut group.children, target_id, node.clone()) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+// 顶层应用在 `items` 中的行下标与行内下标。
+pub(crate) fn locate_root_app(data: &AppData, id: &str) -> Option<(usize, usize)> {
+    for (row, item) in data.items.iter().enumerate() {
+        if let RootItem::Apps(apps) = item {
+            if let Some(column) = apps.iter().position(|app| app.id == id) {
+                return Some((row, column));
+            }
+        }
+    }
+    None
+}
+
+// 顶层分类在 `items` 中的下标。
+pub(crate) fn category_index(data: &AppData, id: &str) -> Option<usize> {
+    data.items
+        .iter()
+        .position(|item| matches!(item, RootItem::Category(category) if category.id == id))
+}
+
 // 在分类或分组下追加一个节点。
 pub(crate) fn append_child(data: &mut AppData, parent_id: &str, item: Item) -> bool {
     if let Some(category) = find_category_mut(data, parent_id) {

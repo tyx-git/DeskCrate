@@ -3,6 +3,7 @@
 import { invoke } from '@tauri-apps/api/core'
 
 import type { AddAppsResponse, AppData, AppEXE, Category, Group } from '../types/catalog'
+import type { DropTarget } from '../types/drop'
 import type { Settings, Theme, ViewMode, WindowInitResponse } from '../types/settings'
 import type { Backend, UrlIconProbe } from './backend'
 import { COMMANDS } from './commands'
@@ -48,6 +49,10 @@ export const tauriBackend: Backend = {
     invoke<void>(COMMANDS.moveApp, { id, parentId, beforeId }),
   moveGroup: (id: string, parentId: string, beforeId: string | null) =>
     invoke<void>(COMMANDS.moveGroup, { id, parentId, beforeId }),
+  dropApp: (id: string, target: DropTarget) => invoke<void>(COMMANDS.dropApp, { id, target }),
+  dropGroup: (id: string, target: DropTarget) => invoke<void>(COMMANDS.dropGroup, { id, target }),
+  dropCategory: (id: string, target: DropTarget) =>
+    invoke<void>(COMMANDS.dropCategory, { id, target }),
   renameApp: (id: string, name: string) => invoke<AppEXE>(COMMANDS.renameApp, { id, name }),
   deleteApp: (id: string) => invoke<void>(COMMANDS.deleteApp, { id }),
   launchIcon: (id: string) => invoke<void>(COMMANDS.launchIcon, { id }),

@@ -9,6 +9,7 @@ pub mod state;
 pub mod storage;
 pub(crate) mod system;
 pub(crate) mod text;
+mod tray;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -109,6 +110,11 @@ pub fn run() {
             // 会和我们双开的快捷方式。放后台线程，失败只记日志。
             services::settings::sweep_stale_auto_start_entries();
 
+            // 窗口 hideTaskbar，只靠托盘图标提供「展开 / 退出」入口；托盘图标
+            // 必须托管在 managed state 里，否则局部变量 drop 后图标会被移除。
+            if let Err(error) = tray::create(app.handle()) {
+                log::warn!("创建托盘图标失败: {error}");
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -127,6 +133,9 @@ pub fn run() {
             commands::catalog::add_apps,
             commands::catalog::move_app,
             commands::catalog::move_group,
+            commands::catalog::drop_app,
+            commands::catalog::drop_group,
+            commands::catalog::drop_category,
             commands::catalog::rename_app,
             commands::catalog::delete_app,
             commands::settings::get_settings,

@@ -1,24 +1,18 @@
-// 目录树渲染与内部拖拽排序：落点经 dropPlan 映射成后端命令，不可表达时拒绝。
-// 分类不支持拖拽（后端无根级重排命令）；分组仅同级重排，应用可跨容器移动。
+// 目录树渲染与拖拽：前端只负责命中 DOM 落点，移动逻辑由后端 drop_* 命令完成。
+// 应用可跨容器移动；分组仅同父级重排；顶层分类只在根列表内重排。
 import { useRef, useState, useEffect, type RefObject } from 'react'
 
-import {
-  planAppMove,
-  planGroupMove,
-  type AppDropTarget,
-  type GroupDropTarget,
-  type MovePlan,
-} from '../lib/dropPlan'
-import { countAppsIn, locateNode, nodeList, type ContainerNode } from '../lib/tree'
+import { countAppsIn, nodeList, type ContainerNode } from '../lib/tree'
 import { useCatalogStore } from '../state/catalogStore'
 import { useUiStore, type DragState } from '../state/uiStore'
 import { isAppItem, isAppsRoot, isGroupItem, type AppEXE } from '../types/catalog'
+import type { DropSide, DropTarget } from '../types/drop'
 import { AppPlate } from './AppPlate'
 import { Glyph } from './Glyph'
 import { SearchResults } from './SearchResults'
 
 interface Hit {
-  target: AppDropTarget | GroupDropTarget
+  target: DropTarget
   el: HTMLElement
 }
 
@@ -26,49 +20,88 @@ function rootIndexOf(el: HTMLElement, fallback: number): number {
   return el.dataset.rootIndex !== undefined ? Number(el.dataset.rootIndex) : fallback
 }
 
+function appSide(e: React.DragEvent, el: HTMLElement): DropSide {
+  const rect = el.getBoundingClientRect()
+  return e.clientX < rect.left + rect.width / 2 ? 'before' : 'after'
+}
+
+function nodeSide(e: React.DragEvent, el: HTMLElement): DropSide {
+  const rect = el.getBoundingClientRect()
+  return e.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+}
+
 function computeHit(e: React.DragEvent, drag: DragState, catalog: HTMLElement): Hit | null {
-  const t = e.target as HTMLElement
+  const target = e.target as HTMLElement
   const data = useCatalogStore.getState().data
 
   if (drag.kind === 'app') {
-    const appEl = t.closest<HTMLElement>('.app')
-    const rowEl = t.closest<HTMLElement>('.row')
-    const gridEl = t.closest<HTMLElement>('.icon-grid')
-    if (appEl?.dataset.app && appEl.dataset.app !== drag.id) {
-      const r = appEl.getBoundingClientRect()
-      const side = e.clientX < r.left + r.width / 2 ? 'before' : 'after'
-      return { target: { type: side, refAppId: appEl.dataset.app }, el: appEl }
-    }
-    if (rowEl?.dataset.id) {
-      return { target: { type: 'into', parentId: rowEl.dataset.id }, el: rowEl }
-    }
-    if (gridEl) {
-      const parentId = gridEl.dataset.container || null
-      const rootIndex = gridEl.dataset.rootIndex !== undefined ? Number(gridEl.dataset.rootIndex) : undefined
-      return { target: { type: 'into', parentId, rootIndex }, el: gridEl }
-    }
-    const roots = Array.from(catalog.querySelectorAll<HTMLElement>(':scope > .node'))
-    for (let i = 0; i < roots.length; i++) {
-      const r = roots[i].getBoundingClientRect()
-      if (e.clientY < r.top + r.height / 2) {
-        return { target: { type: 'root', rootIndex: rootIndexOf(roots[i], i), side: 'before' }, el: roots[i] }
+    const appEl = target.closest<HTMLElement>('.app')
+    if (appEl?.dataset.app) {
+      if (appEl.dataset.app === drag.id) return null
+      return {
+        target: { type: 'app', id: appEl.dataset.app, side: appSide(e, appEl) },
+        el: appEl,
       }
     }
-    if (roots.length > 0) {
-      const last = roots[roots.length - 1]
-      return { target: { type: 'root', rootIndex: rootIndexOf(last, roots.length - 1), side: 'after' }, el: last }
+
+    const gridEl = target.closest<HTMLElement>('.icon-grid')
+    if (gridEl) {
+      const containerId = gridEl.dataset.container
+      if (containerId) {
+        return { target: { type: 'container', id: containerId }, el: gridEl }
+      }
+      return {
+        target: { type: 'root', index: rootIndexOf(gridEl, data.items.length), side: 'before' },
+        el: gridEl,
+      }
     }
-    return { target: { type: 'root', rootIndex: data.items.length, side: 'before' }, el: catalog }
+
+    const rowEl = target.closest<HTMLElement>('.row')
+    if (rowEl?.dataset.id) {
+      return { target: { type: 'container', id: rowEl.dataset.id }, el: rowEl }
+    }
+
+    return rootHit(e, catalog)
   }
 
-  const nodeEl = t.closest<HTMLElement>('.node[data-kind="Group"]')
-  if (!nodeEl?.dataset.node || nodeEl.dataset.node === drag.id) return null
-  const loc = locateNode(data, drag.id)
-  const ref = locateNode(data, nodeEl.dataset.node)
-  if (!loc || !ref || loc.parentId !== ref.parentId) return null
-  const r = nodeEl.getBoundingClientRect()
-  const side = e.clientY < r.top + r.height / 2 ? 'before' : 'after'
-  return { target: { type: 'sibling', refNodeId: nodeEl.dataset.node, side }, el: nodeEl }
+  if (drag.kind === 'Group') {
+    const nodeEl = target.closest<HTMLElement>('.node[data-kind="Group"]')
+    if (!nodeEl?.dataset.node || nodeEl.dataset.node === drag.id) return null
+    return {
+      target: { type: 'container', id: nodeEl.dataset.node, side: nodeSide(e, nodeEl) },
+      el: nodeEl,
+    }
+  }
+
+  if (drag.kind === 'Category') {
+    return rootHit(e, catalog)
+  }
+
+  return null
+}
+
+function rootHit(e: React.DragEvent, catalog: HTMLElement): Hit | null {
+  const roots = Array.from(catalog.querySelectorAll<HTMLElement>(':scope > .node'))
+  for (let i = 0; i < roots.length; i++) {
+    const target = roots[i]
+    const rect = target.getBoundingClientRect()
+    if (e.clientY < rect.top + rect.height / 2) {
+      return {
+        target: { type: 'root', index: rootIndexOf(target, i), side: 'before' },
+        el: target,
+      }
+    }
+  }
+
+  if (roots.length > 0) {
+    const last = roots[roots.length - 1]
+    return {
+      target: { type: 'root', index: rootIndexOf(last, roots.length - 1), side: 'after' },
+      el: last,
+    }
+  }
+
+  return { target: { type: 'rootEnd' }, el: catalog }
 }
 
 function clearMarks(catalog: HTMLElement): void {
@@ -79,38 +112,45 @@ function clearMarks(catalog: HTMLElement): void {
 
 function markHit(hit: Hit): void {
   const { target, el } = hit
-  if (target.type === 'into') {
+
+  if (target.type === 'container') {
+    if (target.side) {
+      el.classList.add(target.side === 'before' ? 'drop-before' : 'drop-after')
+    } else {
+      el.classList.add('drop-into')
+    }
+    return
+  }
+
+  if (target.type === 'rootEnd') {
     el.classList.add('drop-into')
     return
   }
-  const side = target.type === 'root' || target.type === 'sibling' ? target.side : target.type
-  el.classList.add(side === 'before' ? 'drop-before' : 'drop-after')
+
+  el.classList.add(target.side === 'before' ? 'drop-before' : 'drop-after')
 }
 
 export function Catalog() {
   const data = useCatalogStore((s) => s.data)
   const query = useUiStore((s) => s.query)
   const catalogRef = useRef<HTMLDivElement>(null)
-  const dropRef = useRef<MovePlan | null>(null)
+  const dropRef = useRef<DropTarget | null>(null)
 
   const onDragStart = (e: React.DragEvent) => {
-    const t = e.target as HTMLElement
-    const appEl = t.closest<HTMLElement>('.app')
-    const rowEl = t.closest<HTMLElement>('.row')
+    const target = e.target as HTMLElement
+    const appEl = target.closest<HTMLElement>('.app')
+    const nodeEl = target.closest<HTMLElement>('.node')
+
     let drag: DragState
     if (appEl?.dataset.app) {
       drag = { kind: 'app', id: appEl.dataset.app }
-    } else if (rowEl?.dataset.id) {
-      const nodeEl = rowEl.closest<HTMLElement>('.node')
-      if (nodeEl?.dataset.kind !== 'Group' || !nodeEl.dataset.node) {
-        e.preventDefault()
-        return
-      }
-      drag = { kind: 'Group', id: nodeEl.dataset.node }
+    } else if (nodeEl?.dataset.node && (nodeEl.dataset.kind === 'Group' || nodeEl.dataset.kind === 'Category')) {
+      drag = { kind: nodeEl.dataset.kind, id: nodeEl.dataset.node }
     } else {
       e.preventDefault()
       return
     }
+
     e.dataTransfer.effectAllowed = 'move'
     try {
       e.dataTransfer.setData('text/plain', drag.id)
@@ -125,30 +165,37 @@ export function Catalog() {
     const catalog = catalogRef.current
     if (!drag || !catalog) return
     e.preventDefault()
+
     const hit = computeHit(e, drag, catalog)
-    const plan = hit
-      ? drag.kind === 'app'
-        ? planAppMove(data, drag.id, hit.target as AppDropTarget)
-        : planGroupMove(data, drag.id, hit.target as GroupDropTarget)
-      : null
-    e.dataTransfer.dropEffect = plan ? 'move' : 'none'
     clearMarks(catalog)
-    if (plan && hit) markHit(hit)
-    dropRef.current = plan
+    if (hit) {
+      e.dataTransfer.dropEffect = 'move'
+      markHit(hit)
+    } else {
+      e.dataTransfer.dropEffect = 'none'
+    }
+    dropRef.current = hit?.target ?? null
   }
 
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault()
     const catalog = catalogRef.current
     const drag = useUiStore.getState().drag
-    const plan = dropRef.current
+    const target = dropRef.current
     if (catalog) clearMarks(catalog)
     dropRef.current = null
-    if (drag && plan) {
-      const cat = useCatalogStore.getState()
-      if (drag.kind === 'app') void cat.moveApp(drag.id, plan.parentId, plan.beforeId)
-      else if (plan.parentId !== null) void cat.moveGroup(drag.id, plan.parentId, plan.beforeId)
+
+    if (drag && target) {
+      const catalogStore = useCatalogStore.getState()
+      if (drag.kind === 'app') {
+        void catalogStore.dropApp(drag.id, target)
+      } else if (drag.kind === 'Group' && target.type === 'container' && target.side) {
+        void catalogStore.dropGroup(drag.id, target)
+      } else if (drag.kind === 'Category' && (target.type === 'root' || target.type === 'rootEnd')) {
+        void catalogStore.dropCategory(drag.id, target)
+      }
     }
+
     useUiStore.getState().endDrag()
   }
 
@@ -259,7 +306,7 @@ function Node({
   const looseApps = list.filter(isAppItem).map((it) => it.App)
   const subGroups = list.filter(isGroupItem).map((it) => it.Group)
   const isRenaming = renamingId === node.id
-  const dragging = drag?.kind === 'Group' && drag.id === node.id
+  const dragging = drag?.id === node.id && drag.kind === kind
 
   return (
     <div
@@ -275,7 +322,7 @@ function Node({
         data-id={node.id}
         data-drop-id={node.id}
         aria-expanded={!node.isCollapsed}
-        draggable={kind === 'Group' && !isRenaming}
+        draggable={!isRenaming}
         style={indent ? { paddingLeft: `calc(var(--pad-x) + ${indent}px)` } : undefined}
         onClick={() => void toggleCollapse(node.id, !node.isCollapsed)}
       >

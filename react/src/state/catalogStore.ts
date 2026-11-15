@@ -4,6 +4,7 @@ import { create } from 'zustand'
 import { backend, describeError, toAppError } from '../api'
 import { collectCollapseTargets, locateApp, nextAppId } from '../lib/tree'
 import type { AddAppsResponse, AppData, AppEXE, Category, Group } from '../types/catalog'
+import type { DropTarget } from '../types/drop'
 import type { AppError } from '../types/error'
 import { useUiStore } from './uiStore'
 
@@ -32,6 +33,9 @@ interface CatalogState {
   addApps: (parentId: string | null, sourcePaths: string[], rootIndex?: number) => Promise<AddAppsResponse>
   moveApp: (id: string, parentId: string | null, beforeId: string | null) => Promise<boolean>
   moveGroup: (id: string, parentId: string, beforeId: string | null) => Promise<boolean>
+  dropApp: (id: string, target: DropTarget) => Promise<boolean>
+  dropGroup: (id: string, target: DropTarget) => Promise<boolean>
+  dropCategory: (id: string, target: DropTarget) => Promise<boolean>
   renameApp: (id: string, name: string) => Promise<boolean>
   deleteApp: (id: string) => Promise<boolean>
   launchApp: (app: AppEXE) => Promise<void>
@@ -132,6 +136,30 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
   async moveGroup(id, parentId, beforeId) {
     return run(set, get, false, async () => {
       await backend.moveGroup(id, parentId, beforeId)
+      await get().load()
+      return true
+    })
+  },
+
+  async dropApp(id, target) {
+    return run(set, get, false, async () => {
+      await backend.dropApp(id, target)
+      await get().load()
+      return true
+    })
+  },
+
+  async dropGroup(id, target) {
+    return run(set, get, false, async () => {
+      await backend.dropGroup(id, target)
+      await get().load()
+      return true
+    })
+  },
+
+  async dropCategory(id, target) {
+    return run(set, get, false, async () => {
+      await backend.dropCategory(id, target)
       await get().load()
       return true
     })
