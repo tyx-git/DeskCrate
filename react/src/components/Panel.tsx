@@ -5,7 +5,6 @@ import { useEffect, useRef } from 'react'
 import { describeError, isTauriRuntime } from '../api/client'
 import { useAutoCollapse } from '../hooks/useAutoCollapse'
 import { useFileDrop } from '../hooks/useFileDrop'
-import { useHotkeys } from '../hooks/useHotkeys'
 import { useWindowResize } from '../hooks/useWindowResize'
 import { WINDOW_SPEC } from '../spec/windowSpec'
 import { useCatalogStore } from '../state/catalogStore'
@@ -39,7 +38,6 @@ export function Panel({ windowSize }: { windowSize: { width: number; height: num
   const ctx = useUiStore((s) => s.ctx)
 
   useAutoCollapse(panelRef)
-  useHotkeys(searchRef)
   useFileDrop()
 
   // 面板内容尺寸供设置页展示；收束态的 3×80 不是用户关心的「窗口尺寸」。

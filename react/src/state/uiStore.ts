@@ -55,7 +55,6 @@ export type DropMark =
 
 interface UiState {
   query: string
-  activeResult: number
   dialog: DialogState | null
   ctx: CtxState | null
   settingsOpen: boolean
@@ -68,7 +67,6 @@ interface UiState {
   fileDragging: boolean
 
   setQuery: (query: string) => void
-  setActiveResult: (index: number) => void
   openDialog: (dialog: DialogState) => void
   closeDialog: () => void
   openCtx: (type: CtxTargetType, id: string, clientX: number, clientY: number) => void
@@ -95,7 +93,6 @@ const MAX_TOASTS = 3
 
 export const useUiStore = create<UiState>((set, get) => ({
   query: '',
-  activeResult: 0,
   dialog: null,
   ctx: null,
   settingsOpen: false,
@@ -107,8 +104,7 @@ export const useUiStore = create<UiState>((set, get) => ({
   sizeBadge: null,
   fileDragging: false,
 
-  setQuery: (query) => set({ query, activeResult: 0 }),
-  setActiveResult: (activeResult) => set({ activeResult }),
+  setQuery: (query) => set({ query }),
 
   openDialog: (dialog) => set({ dialog, ctx: null }),
   closeDialog: () => set({ dialog: null }),

@@ -14,7 +14,7 @@ export function PanelFoot({ start }: { start: StartResize }) {
   const searching = query.trim().length > 0
   const { apps, cats } = countAll(data)
   const countText = searching ? `${searchApps(data, query).length} 个结果` : `${apps} 个应用 · ${cats} 个分类`
-  const hint = searching ? '↑↓ 选择 · ↵ 启动' : '右键管理 · 拖拽排序'
+  const hint = searching ? '点击结果启动' : '右键管理 · 拖拽排序'
 
   return (
     <footer className="panel-foot">

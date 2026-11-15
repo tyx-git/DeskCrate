@@ -1,5 +1,5 @@
 // 搜索结果列表：前缀优先排序、命中高亮、分类面包屑，空结果给出添加入口。
-import { useEffect, useMemo, useRef } from 'react'
+import { useMemo } from 'react'
 
 import { looksAddable, searchApps } from '../lib/search'
 import { useCatalogStore } from '../state/catalogStore'
@@ -21,18 +21,11 @@ function Highlighted({ text, query }: { text: string; query: string }) {
 
 export function SearchResults() {
   const query = useUiStore((s) => s.query)
-  const activeResult = useUiStore((s) => s.activeResult)
-  const setActiveResult = useUiStore((s) => s.setActiveResult)
   const openDialog = useUiStore((s) => s.openDialog)
   const data = useCatalogStore((s) => s.data)
   const launchApp = useCatalogStore((s) => s.launchApp)
-  const activeRef = useRef<HTMLButtonElement>(null)
 
   const results = useMemo(() => searchApps(data, query), [data, query])
-
-  useEffect(() => {
-    activeRef.current?.scrollIntoView({ block: 'nearest' })
-  }, [activeResult])
 
   const q = query.trim()
   if (results.length === 0) {
@@ -55,33 +48,18 @@ export function SearchResults() {
   }
 
   return (
-    <>
-      <div className="results">
-        {results.map(({ app, path }, i) => (
-          <button
-            key={app.id}
-            ref={i === activeResult ? activeRef : undefined}
-            className={`result-row${i === activeResult ? ' is-active' : ''}`}
-            onMouseEnter={() => setActiveResult(i)}
-            onClick={() => void launchApp(app)}
-          >
-            <span className={`result-plate${app.iconUrl === 'icon:pending' ? ' is-pending' : ''}`}>
-              <PlateInner app={app} />
-            </span>
-            <span className="result-name">
-              <Highlighted text={app.name} query={q} />
-            </span>
-            <span className="result-path">{path.length ? path.join(' › ') : '顶层'}</span>
-            <span className="result-enter">↵</span>
-          </button>
-        ))}
-      </div>
-      <div className="results-hint">
-        <span>↑↓ 选择</span>
-        <span>↵ 启动</span>
-        <span>Esc 清除</span>
-        <span style={{ marginLeft: 'auto' }}>{results.length} 个结果</span>
-      </div>
-    </>
+    <div className="results">
+      {results.map(({ app, path }) => (
+        <button key={app.id} className="result-row" onClick={() => void launchApp(app)}>
+          <span className={`result-plate${app.iconUrl === 'icon:pending' ? ' is-pending' : ''}`}>
+            <PlateInner app={app} />
+          </span>
+          <span className="result-name">
+            <Highlighted text={app.name} query={q} />
+          </span>
+          <span className="result-path">{path.length ? path.join(' › ') : '顶层'}</span>
+        </button>
+      ))}
+    </div>
   )
 }

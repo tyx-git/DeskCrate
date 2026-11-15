@@ -271,8 +271,6 @@ function AppCell({ app }: { app: AppEXE }) {
     <div
       className={`app${dragging ? ' is-dragging' : ''}${launching ? ' is-launching' : ''}`}
       draggable
-      role="button"
-      tabIndex={0}
       data-app={app.id}
       title={`${app.name}\n${app.sourcePath}`}
       onClick={() => void launchApp(app)}
@@ -317,11 +315,8 @@ function Node({
     >
       <div
         className={`row ${kind === 'Category' ? 'cat-row' : 'grp-row'}${dragging ? ' is-dragging' : ''}`}
-        role="button"
-        tabIndex={0}
         data-id={node.id}
         data-drop-id={node.id}
-        aria-expanded={!node.isCollapsed}
         draggable={!isRenaming}
         style={indent ? { paddingLeft: `calc(var(--pad-x) + ${indent}px)` } : undefined}
         onClick={() => void toggleCollapse(node.id, !node.isCollapsed)}

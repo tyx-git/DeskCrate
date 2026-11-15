@@ -10,7 +10,6 @@ interface MenuItem {
   key: string
   label: string
   glyph: GlyphName
-  kbd?: string
   arrow?: boolean
   danger?: boolean
   onClick: () => void
@@ -58,14 +57,13 @@ function TargetMenu({ type, id }: { type: CtxTargetType; id: string }) {
         key: 'launch',
         label: '启动',
         glyph: 'launch',
-        kbd: '↵',
         onClick: () => {
           const loc = locateApp(data, id)
           ui.closeCtx()
           if (loc) void catalog.launchApp(loc.app)
         },
       },
-      { key: 'rename', label: '重命名', glyph: 'pencil', kbd: 'F2', onClick: () => ui.openDialog({ mode: 'rename-app', id }) },
+      { key: 'rename', label: '重命名', glyph: 'pencil', onClick: () => ui.openDialog({ mode: 'rename-app', id }) },
       { key: 'move', label: '移动到…', glyph: 'move', arrow: true, onClick: () => ui.openMoveMenu(id) },
       { key: 'sep', label: '', glyph: 'x', onClick: () => {} },
       {
@@ -73,7 +71,6 @@ function TargetMenu({ type, id }: { type: CtxTargetType; id: string }) {
         label: '删除',
         glyph: 'bin',
         danger: true,
-        kbd: 'Del',
         onClick: () => {
           ui.closeCtx()
           void catalog.deleteApp(id)
@@ -94,7 +91,7 @@ function TargetMenu({ type, id }: { type: CtxTargetType; id: string }) {
       })
     }
     items.push(
-      { key: 'rename', label: '重命名', glyph: 'pencil', kbd: 'F2', onClick: () => ui.startRename(id) },
+      { key: 'rename', label: '重命名', glyph: 'pencil', onClick: () => ui.startRename(id) },
       { key: 'sep', label: '', glyph: 'x', onClick: () => {} },
       {
         key: 'delete',
@@ -123,7 +120,6 @@ function TargetMenu({ type, id }: { type: CtxTargetType; id: string }) {
           <button className={`ctx-item${item.danger ? ' danger' : ''}`} key={item.key} onClick={item.onClick}>
             <Glyph name={item.glyph} />
             <span>{item.label}</span>
-            {item.kbd && <span className="ctx-kbd">{item.kbd}</span>}
             {item.arrow && (
               <span className="ctx-arrow">
                 <Glyph name="chev-right" />

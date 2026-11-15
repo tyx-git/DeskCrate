@@ -192,7 +192,7 @@ DeskCrate/
 │  └─ src/
 │     ├─ api/                类型化 Tauri 命令客户端
 │     ├─ components/         侧栏、设置页、菜单和对话框
-│     ├─ hooks/              自动收起、快捷键、文件拖放、窗口缩放
+│     ├─ hooks/              自动收起、文件拖放、窗口缩放
 │     ├─ lib/                只读树查询、落点规划、窗口缩放几何、启动状态机
 │     ├─ state/              Zustand stores
 │     └─ types/              前端模型契约
