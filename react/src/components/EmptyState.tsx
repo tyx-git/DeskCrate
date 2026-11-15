@@ -6,10 +6,10 @@ export function EmptyState() {
   return (
     <div className="empty">
       <svg className="empty-mark" viewBox="0 0 14 14" aria-hidden="true">
-        <rect x="0.9" y="0.9" width="5.4" height="5.4" fill="none" stroke="currentColor" strokeWidth="1.1" />
-        <rect x="7.7" y="0.9" width="5.4" height="5.4" fill="none" stroke="currentColor" strokeWidth="1.1" />
-        <rect x="0.9" y="7.7" width="5.4" height="5.4" fill="none" stroke="currentColor" strokeWidth="1.1" />
-        <rect x="7.7" y="7.7" width="5.4" height="5.4" fill="currentColor" />
+        <rect x="0.7" y="0.7" width="5.6" height="5.6" rx="1.2" fill="currentColor" opacity="0.22" />
+        <rect x="7.7" y="0.7" width="5.6" height="5.6" rx="1.2" fill="currentColor" opacity="0.38" />
+        <rect x="0.7" y="7.7" width="5.6" height="5.6" rx="1.2" fill="currentColor" opacity="0.56" />
+        <rect x="7.7" y="7.7" width="5.6" height="5.6" rx="1.2" fill="currentColor" opacity="0.92" />
       </svg>
       <p className="empty-title">把应用拖进箱子</p>
       <p className="empty-desc">

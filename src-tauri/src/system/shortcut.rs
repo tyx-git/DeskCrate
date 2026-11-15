@@ -30,6 +30,62 @@ const PATH_BUFFER_LEN: usize = 32_768;
 // 这里使用 Windows 原生的 `IShellLinkW`，而不是把快捷方式文件当作
 // 普通文本处理。这样可以让系统负责解析目标路径、工作目录、参数和
 // 图标位置等 Shell Link 字段。
+pub(crate) fn create_shortcut(
+    path: &Path,
+    target: &Path,
+    working_dir: Option<&Path>,
+    description: Option<&str>,
+) -> AppResult<()> {
+    let _com = ComApartment::initialize()?;
+    let wide_path =
+        wide::nul_terminated(path.as_os_str(), "shortcut_invalid_path", "快捷方式路径")?;
+    let wide_target = wide::nul_terminated(
+        target.as_os_str(),
+        "shortcut_invalid_target",
+        "快捷方式目标",
+    )?;
+
+    let shell_link: IShellLinkW = unsafe {
+        CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)
+            .map_err(|error| support::windows_error("shortcut_create_failed", error))?
+    };
+
+    unsafe {
+        shell_link
+            .SetPath(PCWSTR(wide_target.as_ptr()))
+            .map_err(|error| support::windows_error("shortcut_target_failed", error))?;
+
+        if let Some(dir) = working_dir {
+            let wide_dir = wide::nul_terminated(
+                dir.as_os_str(),
+                "shortcut_invalid_workdir",
+                "快捷方式工作目录",
+            )?;
+            shell_link
+                .SetWorkingDirectory(PCWSTR(wide_dir.as_ptr()))
+                .map_err(|error| support::windows_error("shortcut_workdir_failed", error))?;
+        }
+
+        if let Some(description) = description {
+            let wide_description = wide::to_wide(description);
+            shell_link
+                .SetDescription(PCWSTR(wide_description.as_ptr()))
+                .map_err(|error| support::windows_error("shortcut_description_failed", error))?;
+        }
+    }
+
+    let persist_file: IPersistFile = shell_link
+        .cast()
+        .map_err(|error| support::windows_error("shortcut_cast_failed", error))?;
+    unsafe {
+        persist_file
+            .Save(PCWSTR(wide_path.as_ptr()), true)
+            .map_err(|error| support::windows_error("shortcut_save_failed", error))?;
+    }
+
+    Ok(())
+}
+
 pub(crate) fn parse_shortcut(path: &Path) -> AppResult<ParsedShortcut> {
     if !path.is_file() {
         return Err(AppError::new(

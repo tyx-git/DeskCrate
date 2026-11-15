@@ -5,7 +5,7 @@ use crate::{
     },
     state::AppState,
     storage::SettingsRepository,
-    system,
+    system::{self, registory::AutoStartOutcome},
 };
 
 // 读取 `config.json` 中的全部应用配置。
@@ -103,15 +103,35 @@ where
 // 启动时把开机自启动对一次账。
 //
 // 配置是应用状态、注册表是系统状态，两者会各说各话：用户手动清掉启动项、
-// 或者换了安装目录之后旧路径还挂在 Run 键里。这里以配置为准补一次，
-// 保证「设置里开着」和「系统会启动我们」不会长期不一致。
+// 换了安装目录之后旧路径还挂在 Run 键里，或者在任务管理器里禁用/启用。
+// 注册表层负责读 Run 值和 StartupApproved，返回需要同步的配置结果；这里
+// 只负责把 `auto_start` 原子写回，保证「设置里开着」和「系统会启动我们」
+// 不会长期不一致。
 //
 // 失败只向上返回错误，由调用方决定要不要惊动用户 —— 自启动是附加功能，
 // 不该拦住启动。
 pub fn reconcile_auto_start(state: &AppState) -> AppResult<()> {
-    let store = state.get_lock()?;
-    let configured = store.load_settings()?.auto_start;
-    system::registory::reconcile_auto_start(configured);
+    let configured = {
+        let store = state.get_lock()?;
+        store.load_settings()?.auto_start
+    };
+
+    match system::registory::reconcile_auto_start(configured) {
+        AutoStartOutcome::NoChange => {}
+        AutoStartOutcome::TurnOn => {
+            mutate_settings(state, |settings| {
+                settings.auto_start = true;
+                Ok(())
+            })?;
+        }
+        AutoStartOutcome::TurnOff => {
+            mutate_settings(state, |settings| {
+                settings.auto_start = false;
+                Ok(())
+            })?;
+        }
+    }
+
     Ok(())
 }
 

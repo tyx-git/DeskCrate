@@ -40,7 +40,7 @@ export function SettingsSheet() {
           <label className="set-row">
             <span className="set-text">
               <span className="set-name">开机自启动</span>
-              <span className="set-desc">随 Windows 登录启动 · 写入 HKCU Run</span>
+              <span className="set-desc">随 Windows 登录启动 · 启动文件夹快捷方式</span>
             </span>
             <input
               type="checkbox"

@@ -98,16 +98,16 @@ pub fn run() {
                 Err(error) => log::warn!("图标缓存对账失败: {error}"),
             }
 
-            // 开机自启动对账：配置说开就确保 Run 键里有我们，说关就确保没有。
-            // 与图标对账同理，失败只记日志 —— 不该因为注册表不可写就起不来。
+            // 开机自启动对账：配置说开就确保「启动」文件夹里有快捷方式，说关就确保没有。
+            // 与图标对账同理，失败只记日志 —— 不该因为系统状态不可写就起不来。
             if let Err(error) =
                 services::settings::reconcile_auto_start(app.state::<state::AppState>().inner())
             {
                 log::warn!("开机自启动对账失败: {error}");
             }
 
-            // 扫尾：清掉指向已删除副本的注册表启动项，以及「启动」文件夹里失效或
-            // 会和我们双开的快捷方式。放后台线程，失败只记日志。
+            // 扫尾：清掉指向已删除副本的启动项/快捷方式，以及会和我们双开的重复项。
+            // 放后台线程，失败只记日志。
             services::settings::sweep_stale_auto_start_entries();
 
             // 窗口 hideTaskbar，只靠托盘图标提供「展开 / 退出」入口；托盘图标

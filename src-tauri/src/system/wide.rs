@@ -31,15 +31,8 @@ pub(crate) fn to_wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
-// `RegSetValueExW` 接收 UTF-16 的原始字节，而不是 `u16` 切片。
-pub(crate) fn to_wide_bytes(value: &str) -> Vec<u8> {
-    value
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .flat_map(|unit| unit.to_le_bytes())
-        .collect()
-}
-
+// `RegSetValueExW` 接收 UTF-16 的原始字节；目前注册表只写 REG_BINARY，
+// 不再需要字符串字节转换。
 fn validate_no_nul(value: &OsStr, error_code: &'static str, value_name: &str) -> AppResult<()> {
     if value.encode_wide().any(|character| character == 0) {
         return Err(AppError::new(

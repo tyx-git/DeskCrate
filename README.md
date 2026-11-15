@@ -158,11 +158,16 @@ icons/
 
 `data.json` 与 `config.json` 分开保存。写入前会在内存中完成模型修改和校验，落盘时使用同目录临时文件与原子替换。启动时会对图标缓存做对账，清理严格符合应用 ID 命名规则的孤儿缓存。
 
-开机自启动使用当前用户的 Windows 注册表项：
+开机自启动使用当前用户的「启动」文件夹快捷方式：
 
 ```text
-HKCU\Software\Microsoft\Windows\CurrentVersion\Run\DeskCrate
+%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\DeskCrate.lnk
+HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder\DeskCrate.lnk
 ```
+
+第二条是 Windows 任务管理器的启用/禁用标记。应用启动时会读取它：任务管理器禁用后，设置页会同步为关闭，并保留被禁用的快捷方式以便重新启用；任务管理器重新启用后，设置页会同步为开启。应用内关闭自启动会立即删除快捷方式和标记，不再等下次启动。
+
+这里不用 HKCU Run：联想电脑管家等启动优化器会把第三方写入的 Run 值移到 `Run\LenovoDisabled`，导致实际不会开机启动。应用仍会在开启/关闭时清理遗留的 `Run\DeskCrate`，但不再把它作为自启动入口。
 
 ## 后端 Command
 
