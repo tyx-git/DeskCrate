@@ -2,8 +2,8 @@ use crate::{
     error::AppResult,
     models::{
         AddAppRequest, AddAppsRequest, AddAppsResponse, AddCategoryRequest, AddGroupRequest,
-        AppData, AppEXE, Category, DeleteRequest, DropTarget, Group, MoveAppRequest,
-        MoveGroupRequest, RenameRequest, SetNodeCollapsedRequest,
+        AppData, AppEXE, Category, DeleteRequest, DropTarget, Group, RenameRequest,
+        SetNodeCollapsedRequest,
     },
     services,
     state::AppState,
@@ -146,72 +146,14 @@ pub fn add_apps(
     Ok(result)
 }
 
-// 把一个应用移动到新位置（拖拽换位）。
-//
-// `parentId` 传 `null` 表示移到顶层；`beforeId` 是参照节点（插到它之前），
-// 传 `null` 表示插到目标容器的末尾。
+// 统一的拖拽入口：前端只上报命中的节点与相对位置，后端决定能否移动以及插到哪里。
 #[tauri::command]
-pub fn move_app(
-    id: String,
-    parent_id: Option<String>,
-    before_id: Option<String>,
-    state: tauri::State<'_, AppState>,
-) -> AppResult<()> {
-    services::catalog::move_app(
-        state.inner(),
-        MoveAppRequest {
-            id,
-            parent_id,
-            before_id,
-        },
-    )
-}
-
-#[tauri::command]
-pub fn move_group(
-    id: String,
-    parent_id: String,
-    before_id: Option<String>,
-    state: tauri::State<'_, AppState>,
-) -> AppResult<()> {
-    services::catalog::move_group(
-        state.inner(),
-        MoveGroupRequest {
-            id,
-            parent_id,
-            before_id,
-        },
-    )
-}
-
-// 拖拽应用：前端只传 DOM 命中结果，后端计算最终插入位置。
-#[tauri::command]
-pub fn drop_app(
+pub fn drop_item(
     id: String,
     target: DropTarget,
     state: tauri::State<'_, AppState>,
 ) -> AppResult<()> {
-    services::catalog::drop_app(state.inner(), id, target)
-}
-
-// 拖拽分组：只允许同父级重排。
-#[tauri::command]
-pub fn drop_group(
-    id: String,
-    target: DropTarget,
-    state: tauri::State<'_, AppState>,
-) -> AppResult<()> {
-    services::catalog::drop_group(state.inner(), id, target)
-}
-
-// 拖拽分类：只允许根列表重排。
-#[tauri::command]
-pub fn drop_category(
-    id: String,
-    target: DropTarget,
-    state: tauri::State<'_, AppState>,
-) -> AppResult<()> {
-    services::catalog::drop_category(state.inner(), id, target)
+    services::catalog::drop_item(state.inner(), id, target)
 }
 
 // 按ID重命名应用，并返回更新后的应用对象。

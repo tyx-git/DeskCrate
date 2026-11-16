@@ -4,8 +4,7 @@ pub mod system;
 pub use catalog::{
     AddAppRequest, AddAppsRequest, AddAppsResponse, AddCategoryRequest, AddGroupRequest, AppData,
     AppEXE, AppError, BatchAddFailure, Category, DeleteRequest, DropSide, DropTarget, Group,
-    IconType, Item, MoveAppRequest, MoveGroupRequest, RenameRequest, RootItem,
-    SetNodeCollapsedRequest,
+    IconType, Item, RenameRequest, RootItem, SetNodeCollapsedRequest,
 };
 pub use settings::{
     CssSize, ResizeWindowRequest, Settings, Theme, UpdateAutoCollapseRequest,

@@ -46,13 +46,6 @@ export interface DragState {
   id: string
 }
 
-/** 落点高亮标记，由拖拽计算写入、各节点据此渲染插入线/容器高亮。 */
-export type DropMark =
-  | { kind: 'app'; id: string; side: 'before' | 'after' }
-  | { kind: 'node'; id: string; side: 'before' | 'after' }
-  | { kind: 'row'; id: string }
-  | { kind: 'grid'; containerId: string; mode: 'into' | 'before' | 'after' }
-
 interface UiState {
   query: string
   dialog: DialogState | null
@@ -60,7 +53,6 @@ interface UiState {
   settingsOpen: boolean
   toasts: Toast[]
   drag: DragState | null
-  dropMark: DropMark | null
   renamingId: string | null
   launchingId: string | null
   sizeBadge: string | null
@@ -78,7 +70,6 @@ interface UiState {
   notify: (kind: 'error' | 'info' | 'success', text: string) => void
   dismissToast: (id: number) => void
   startDrag: (drag: DragState) => void
-  setDropMark: (mark: DropMark | null) => void
   endDrag: () => void
   startRename: (id: string) => void
   endRename: () => void
@@ -98,7 +89,6 @@ export const useUiStore = create<UiState>((set, get) => ({
   settingsOpen: false,
   toasts: [],
   drag: null,
-  dropMark: null,
   renamingId: null,
   launchingId: null,
   sizeBadge: null,
@@ -166,9 +156,8 @@ export const useUiStore = create<UiState>((set, get) => ({
     }, 180)
   },
 
-  startDrag: (drag) => set({ drag, dropMark: null, ctx: null }),
-  setDropMark: (dropMark) => set({ dropMark }),
-  endDrag: () => set({ drag: null, dropMark: null }),
+  startDrag: (drag) => set({ drag, ctx: null, fileDragging: false }),
+  endDrag: () => set({ drag: null, fileDragging: false }),
 
   startRename: (renamingId) => set({ renamingId, ctx: null }),
   endRename: () => set({ renamingId: null }),

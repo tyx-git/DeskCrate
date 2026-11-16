@@ -9,8 +9,7 @@ use crate::{
     models::{
         AddAppRequest, AddAppsRequest, AddAppsResponse, AddCategoryRequest, AddGroupRequest,
         AppData, AppEXE, AppError, BatchAddFailure, Category, DeleteRequest, DropSide, DropTarget,
-        Group, IconType, Item, MoveAppRequest, MoveGroupRequest, RenameRequest, RootItem,
-        SetNodeCollapsedRequest,
+        Group, IconType, Item, RenameRequest, RootItem, SetNodeCollapsedRequest,
     },
     path,
     state::AppState,
@@ -498,165 +497,43 @@ fn url_origin(url: &str) -> Option<String> {
     favicon::parse_http_origin(url)
 }
 
-// 把一个应用移动到新位置（拖拽换位）。
+// 统一的拖拽落点入口。
 //
-// 分两步：先从原位置摘下来，再按目标插回去。顺序不能反 —— 先插再摘会让应用在
-// 两个地方同时存在，而 `remove_node` 只删它找到的第一个。
-//
-// 目标用「参照节点 + 插到它之前」表达，因此**先摘后插不会错位**：参照节点在被
-// 摘掉自己之后仍然指向同一个元素。
-pub fn move_app(state: &AppState, request: MoveAppRequest) -> AppResult<()> {
-    let store = state.get_lock()?;
-    store.mutate_data(|data| {
-        let Some(Item::App(app)) = tree::remove_node(data, &request.id, tree::NodeKind::App) else {
-            return Err(not_found("app_not_found", "应用", &request.id));
-        };
-
-        let before_id = request.before_id.as_deref();
-
-        match &request.parent_id {
-            None => match before_id {
-                Some(reference) => {
-                    if tree::insert_into_root_row(data, reference, app) {
-                        return Ok(());
-                    }
-                    Err(AppError::new(
-                        "reference_not_found",
-                        format!("找不到参照节点: {reference}"),
-                    ))
-                }
-                None => {
-                    tree::append_to_root(data, app);
-                    Ok(())
-                }
-            },
-            Some(parent_id) => match before_id {
-                Some(reference) => {
-                    // 参照节点必须是目标容器的直接子项，避免跨容器错插。
-                    if tree::parent_of_node(data, reference).as_deref() != Some(parent_id.as_str())
-                    {
-                        return Err(AppError::new(
-                            "reference_not_found",
-                            format!("参照节点不在目标容器中: {reference}"),
-                        ));
-                    }
-                    if tree::insert_before_in_container(data, parent_id, reference, Item::App(app))
-                    {
-                        Ok(())
-                    } else {
-                        Err(AppError::new(
-                            "reference_not_found",
-                            format!("找不到参照节点: {reference}"),
-                        ))
-                    }
-                }
-                None => {
-                    if tree::append_child(data, parent_id, Item::App(app)) {
-                        Ok(())
-                    } else {
-                        Err(not_found("parent_not_found", "目标容器", parent_id))
-                    }
-                }
-            },
-        }
-    })
-}
-
-// 仅在原父容器中重排分组，保留其完整子树和嵌套深度。
-pub fn move_group(state: &AppState, request: MoveGroupRequest) -> AppResult<()> {
-    validate_id(&request.id)?;
-    validate_id(&request.parent_id)?;
-    if let Some(before_id) = request.before_id.as_deref() {
-        validate_id(before_id)?;
-    }
-
-    let store = state.get_lock()?;
-    store.mutate_data(|data| {
-        let original_parent = tree::parent_of_node(data, &request.id)
-            .ok_or_else(|| not_found("group_not_found", "分组", &request.id))?;
-        if original_parent != request.parent_id {
-            return Err(AppError::new(
-                "invalid_group_parent",
-                "分组只能在当前父容器内重排",
-            ));
-        }
-
-        let Some(Item::Group(group)) = tree::remove_node(data, &request.id, tree::NodeKind::Group)
-        else {
-            return Err(not_found("group_not_found", "分组", &request.id));
-        };
-
-        if let Some(reference) = request.before_id.as_deref() {
-            if reference == request.id || tree::group_contains_id(&group, reference) {
-                return Err(AppError::new(
-                    "invalid_group_position",
-                    "分组不能移动到自身或后代之前",
-                ));
-            }
-            if tree::parent_of_node(data, reference).as_deref() != Some(request.parent_id.as_str())
-            {
-                return Err(AppError::new(
-                    "invalid_group_position",
-                    "参照节点必须与分组处于同一父容器",
-                ));
-            }
-            if tree::insert_before_in_container(
-                data,
-                &request.parent_id,
-                reference,
-                Item::Group(group),
-            ) {
-                Ok(())
-            } else {
-                Err(AppError::new(
-                    "reference_not_found",
-                    format!("找不到参照节点: {reference}"),
-                ))
-            }
-        } else if tree::append_child(data, &request.parent_id, Item::Group(group)) {
-            Ok(())
-        } else {
-            Err(not_found(
-                "parent_not_found",
-                "分组的父容器",
-                &request.parent_id,
-            ))
-        }
-    })
-}
-
-// 把拖拽落点应用到应用上。
-//
-// 前端只传 DOM 命中结果；是否跨容器、是否跳过自身、顶层行被摘空后根下标
-// 如何校正，全部在这里依据当前权威树计算。
-pub fn drop_app(state: &AppState, id: String, target: DropTarget) -> AppResult<()> {
+// 前端只负责判断指针命中了哪个节点；节点类型、同父校验、先摘后插、根下标校正
+// 都在这里依据当前权威树计算。同组排序是 `Item` 目标的一种，跨组移动复用同一条路径。
+pub fn drop_item(state: &AppState, id: String, target: DropTarget) -> AppResult<()> {
     validate_id(&id)?;
-
-    match &target {
-        DropTarget::App { id: target_id, .. } => {
-            validate_id(target_id)?;
-            if target_id == &id {
-                return Ok(());
-            }
-        }
-        DropTarget::Container {
-            id: parent_id,
-            side: None,
-        } => validate_id(parent_id)?,
-        DropTarget::Container { .. } => {
-            return Err(AppError::new(
-                "invalid_drop_target",
-                "应用只能追加到容器，不能插到同级节点之间",
-            ));
-        }
-        DropTarget::Root { .. } | DropTarget::RootEnd => {}
-    }
+    validate_drop_target(&target)?;
 
     let store = state.get_lock()?;
-    store.mutate_data(|data| apply_app_drop(data, &id, target))
+    store.mutate_data(|data| match tree::item_kind(data, &id) {
+        Some(tree::ItemKind::App) => apply_app_drop(data, &id, target),
+        Some(tree::ItemKind::Group) => apply_group_drop(data, &id, target),
+        Some(tree::ItemKind::Category) => apply_category_drop(data, &id, target),
+        None => Err(not_found("item_not_found", "节点", &id)),
+    })
+}
+
+fn validate_drop_target(target: &DropTarget) -> AppResult<()> {
+    match target {
+        DropTarget::Item { id, .. } | DropTarget::Container { id } => validate_id(id),
+        DropTarget::Root { .. } | DropTarget::RootEnd => Ok(()),
+    }
 }
 
 fn apply_app_drop(data: &mut AppData, id: &str, target: DropTarget) -> AppResult<()> {
+    if let DropTarget::Item { id: target_id, .. } = &target {
+        if target_id == id {
+            return Ok(());
+        }
+        if tree::item_kind(data, target_id).is_none() {
+            return Err(AppError::new(
+                "reference_not_found",
+                format!("找不到参照节点: {target_id}"),
+            ));
+        }
+    }
+
     let source_root = tree::locate_root_app(data, id);
     let root_len = data.items.len();
 
@@ -665,11 +542,11 @@ fn apply_app_drop(data: &mut AppData, id: &str, target: DropTarget) -> AppResult
     };
 
     match target {
-        DropTarget::App {
+        DropTarget::Item {
             id: target_id,
             side,
         } => insert_app_relative(data, &target_id, side, app),
-        DropTarget::Container { id: parent_id, .. } => {
+        DropTarget::Container { id: parent_id } => {
             if tree::append_child(data, &parent_id, Item::App(app)) {
                 Ok(())
             } else {
@@ -702,11 +579,14 @@ fn insert_app_relative(
     side: DropSide,
     app: AppEXE,
 ) -> AppResult<()> {
-    if tree::find_app(data, target_id).is_none() {
-        return Err(AppError::new(
-            "reference_not_found",
-            format!("找不到参照应用: {target_id}"),
-        ));
+    // 目标是顶层分类时，前后插入等价于把应用放到该分类所在根下标。
+    if let Some(index) = tree::category_index(data, target_id) {
+        let insert_at = match side {
+            DropSide::Before => index,
+            DropSide::After => index + 1,
+        };
+        tree::insert_root_app(data, app, insert_at);
+        return Ok(());
     }
 
     let parent_id = tree::parent_of_node(data, target_id);
@@ -739,42 +619,40 @@ fn root_insertion_index(root_len: usize, index: usize, side: DropSide) -> usize 
     }
 }
 
-// 把分组拖到同级分组的之前/之后；跨父容器一律拒绝。
-pub fn drop_group(state: &AppState, id: String, target: DropTarget) -> AppResult<()> {
-    validate_id(&id)?;
+// 分组只能在同一个父容器内重排；跨父容器一律拒绝。
+fn apply_group_drop(data: &mut AppData, id: &str, target: DropTarget) -> AppResult<()> {
+    let source_parent =
+        tree::parent_of_node(data, id).ok_or_else(|| not_found("group_not_found", "分组", id))?;
 
-    let (target_id, side) = match target {
-        DropTarget::Container {
-            id: target_id,
-            side: Some(side),
-        } => (target_id, side),
-        _ => {
+    let (target_id, side, target_parent) = match target {
+        DropTarget::Item {
+            id: target_node_id,
+            side,
+        } => {
+            if target_node_id == id {
+                return Ok(());
+            }
+            if tree::find_group(data, &target_node_id).is_none()
+                && tree::find_app(data, &target_node_id).is_none()
+            {
+                return Err(AppError::new(
+                    "reference_not_found",
+                    format!("找不到参照节点: {target_node_id}"),
+                ));
+            }
+            let parent = tree::parent_of_node(data, &target_node_id)
+                .ok_or_else(|| not_found("reference_not_found", "参照节点", &target_node_id))?;
+            (Some(target_node_id), Some(side), parent)
+        }
+        DropTarget::Container { id: parent_id } => (None, None, parent_id),
+        DropTarget::Root { .. } | DropTarget::RootEnd => {
             return Err(AppError::new(
                 "invalid_drop_target",
-                "分组只能拖到同级分组之前或之后",
+                "分组只能在当前父容器内重排",
             ));
         }
     };
-    validate_id(&target_id)?;
 
-    if target_id == id {
-        return Ok(());
-    }
-
-    let store = state.get_lock()?;
-    store.mutate_data(|data| apply_group_drop(data, &id, &target_id, side))
-}
-
-fn apply_group_drop(
-    data: &mut AppData,
-    id: &str,
-    target_id: &str,
-    side: DropSide,
-) -> AppResult<()> {
-    let source_parent =
-        tree::parent_of_node(data, id).ok_or_else(|| not_found("group_not_found", "分组", id))?;
-    let target_parent = tree::parent_of_node(data, target_id)
-        .ok_or_else(|| not_found("group_not_found", "目标分组", target_id))?;
     if source_parent != target_parent {
         return Err(AppError::new(
             "invalid_group_parent",
@@ -786,37 +664,29 @@ fn apply_group_drop(
         return Err(not_found("group_not_found", "分组", id));
     };
 
-    let inserted = match side {
-        DropSide::Before => {
+    let inserted = match (target_id.as_deref(), side) {
+        (Some(target_id), Some(DropSide::Before)) => {
             tree::insert_before_in_container(data, &target_parent, target_id, Item::Group(group))
         }
-        DropSide::After => tree::insert_after_node(data, target_id, Item::Group(group)),
+        (Some(target_id), Some(DropSide::After)) => {
+            tree::insert_after_node(data, target_id, Item::Group(group))
+        }
+        _ => tree::append_child(data, &target_parent, Item::Group(group)),
     };
 
     if inserted {
         Ok(())
-    } else {
+    } else if let Some(target_id) = target_id {
         Err(AppError::new(
             "reference_not_found",
-            format!("找不到参照分组: {target_id}"),
+            format!("找不到参照节点: {target_id}"),
         ))
+    } else {
+        Err(not_found("parent_not_found", "目标容器", &target_parent))
     }
 }
 
-// 把分类拖到根列表的目标下标；删除分类后按源位置校正目标下标。
-pub fn drop_category(state: &AppState, id: String, target: DropTarget) -> AppResult<()> {
-    validate_id(&id)?;
-    if !matches!(&target, DropTarget::Root { .. } | DropTarget::RootEnd) {
-        return Err(AppError::new(
-            "invalid_drop_target",
-            "分类只能拖到根列表的目标位置",
-        ));
-    }
-
-    let store = state.get_lock()?;
-    store.mutate_data(|data| apply_category_drop(data, &id, target))
-}
-
+// 分类只能放到根列表的目标下标；删除分类后按源位置校正目标下标。
 fn apply_category_drop(data: &mut AppData, id: &str, target: DropTarget) -> AppResult<()> {
     let source = tree::category_index(data, id)
         .ok_or_else(|| not_found("category_not_found", "分类", id))?;
@@ -824,7 +694,12 @@ fn apply_category_drop(data: &mut AppData, id: &str, target: DropTarget) -> AppR
     let insertion = match &target {
         DropTarget::Root { index, side } => root_insertion_index(root_len, *index, *side),
         DropTarget::RootEnd => root_len,
-        _ => unreachable!(),
+        _ => {
+            return Err(AppError::new(
+                "invalid_drop_target",
+                "分类只能拖到根列表的目标位置",
+            ));
+        }
     };
 
     let Some(category) = tree::remove_category(data, id) else {
@@ -1321,7 +1196,7 @@ mod tests {
         apply_app_drop(
             &mut data,
             "a",
-            DropTarget::App {
+            DropTarget::Item {
                 id: "c".into(),
                 side: DropSide::After,
             },
@@ -1346,7 +1221,7 @@ mod tests {
         apply_app_drop(
             &mut data,
             "a1",
-            DropTarget::App {
+            DropTarget::Item {
                 id: "b1".into(),
                 side: DropSide::Before,
             },
@@ -1366,20 +1241,39 @@ mod tests {
             RootItem::Category(category("B", vec![])),
         ]);
 
-        apply_app_drop(
-            &mut data,
-            "a1",
-            DropTarget::Container {
-                id: "B".into(),
-                side: None,
-            },
-        )
-        .unwrap();
+        apply_app_drop(&mut data, "a1", DropTarget::Container { id: "B".into() }).unwrap();
 
         let RootItem::Category(category_b) = &data.items[1] else {
             panic!("expected category B");
         };
         assert_eq!(root_group_ids(category_b), vec!["a1"]);
+    }
+
+    #[test]
+    fn app_drop_before_category_places_app_row_at_root_index() {
+        let mut data = data(vec![
+            RootItem::Apps(vec![app("a")]),
+            RootItem::Category(category("X", vec![])),
+        ]);
+
+        apply_app_drop(
+            &mut data,
+            "a",
+            DropTarget::Item {
+                id: "X".into(),
+                side: DropSide::Before,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(root_ids(&data), vec!["apps:1", "X"]);
+        assert_eq!(
+            match &data.items[0] {
+                RootItem::Apps(apps) => apps[0].id.as_str(),
+                RootItem::Category(_) => panic!("expected apps row"),
+            },
+            "a"
+        );
     }
 
     #[test]
@@ -1452,6 +1346,135 @@ mod tests {
     }
 
     #[test]
+    fn app_drop_reorders_inside_group_before_target() {
+        let mut data = data(vec![RootItem::Category(category(
+            "A",
+            vec![Item::Group(group(
+                "g1",
+                vec![
+                    Item::App(app("a")),
+                    Item::App(app("b")),
+                    Item::App(app("c")),
+                ],
+            ))],
+        ))]);
+
+        apply_app_drop(
+            &mut data,
+            "c",
+            DropTarget::Item {
+                id: "a".into(),
+                side: DropSide::Before,
+            },
+        )
+        .unwrap();
+
+        let RootItem::Category(category_a) = &data.items[0] else {
+            panic!("expected category A");
+        };
+        let Item::Group(group_a) = &category_a.groups[0] else {
+            panic!("expected group g1");
+        };
+        assert_eq!(
+            group_a
+                .children
+                .iter()
+                .map(|item| match item {
+                    Item::App(app) => app.id.as_str(),
+                    Item::Group(group) => group.id.as_str(),
+                })
+                .collect::<Vec<_>>(),
+            vec!["c", "a", "b"]
+        );
+    }
+
+    #[test]
+    fn app_drop_reorders_inside_group_after_target() {
+        let mut data = data(vec![RootItem::Category(category(
+            "A",
+            vec![Item::Group(group(
+                "g1",
+                vec![
+                    Item::App(app("a")),
+                    Item::App(app("b")),
+                    Item::App(app("c")),
+                ],
+            ))],
+        ))]);
+
+        apply_app_drop(
+            &mut data,
+            "a",
+            DropTarget::Item {
+                id: "b".into(),
+                side: DropSide::After,
+            },
+        )
+        .unwrap();
+
+        let RootItem::Category(category_a) = &data.items[0] else {
+            panic!("expected category A");
+        };
+        let Item::Group(group_a) = &category_a.groups[0] else {
+            panic!("expected group g1");
+        };
+        assert_eq!(
+            group_a
+                .children
+                .iter()
+                .map(|item| match item {
+                    Item::App(app) => app.id.as_str(),
+                    Item::Group(group) => group.id.as_str(),
+                })
+                .collect::<Vec<_>>(),
+            vec!["b", "a", "c"]
+        );
+    }
+
+    #[test]
+    fn app_drop_moves_between_groups() {
+        let mut data = data(vec![RootItem::Category(category(
+            "A",
+            vec![
+                Item::Group(group("g1", vec![Item::App(app("a"))])),
+                Item::Group(group("g2", vec![Item::App(app("b"))])),
+            ],
+        ))]);
+
+        apply_app_drop(
+            &mut data,
+            "a",
+            DropTarget::Item {
+                id: "b".into(),
+                side: DropSide::After,
+            },
+        )
+        .unwrap();
+
+        let RootItem::Category(category_a) = &data.items[0] else {
+            panic!("expected category A");
+        };
+        let Item::Group(group_g1) = &category_a.groups[0] else {
+            panic!("expected group g1");
+        };
+        let Item::Group(group_g2) = &category_a.groups[1] else {
+            panic!("expected group g2");
+        };
+        assert!(group_g1.children.is_empty());
+        assert_eq!(
+            group_g2
+                .children
+                .iter()
+                .map(|item| match item {
+                    Item::App(app) => app.id.as_str(),
+                    Item::Group(group) => group.id.as_str(),
+                })
+                .collect::<Vec<_>>(),
+            vec!["b", "a"]
+        );
+    }
+
+    #[test]
     fn group_drop_reorders_same_parent_after() {
         let mut data = data(vec![RootItem::Category(category(
             "A",
@@ -1461,7 +1484,15 @@ mod tests {
             ],
         ))]);
 
-        apply_group_drop(&mut data, "g1", "g2", DropSide::After).unwrap();
+        apply_group_drop(
+            &mut data,
+            "g1",
+            DropTarget::Item {
+                id: "g2".into(),
+                side: DropSide::After,
+            },
+        )
+        .unwrap();
 
         let RootItem::Category(category_a) = &data.items[0] else {
             panic!("expected category A");
@@ -1476,7 +1507,15 @@ mod tests {
             RootItem::Category(category("B", vec![Item::Group(group("g2", vec![]))])),
         ]);
 
-        let error = apply_group_drop(&mut data, "g1", "g2", DropSide::Before).unwrap_err();
+        let error = apply_group_drop(
+            &mut data,
+            "g1",
+            DropTarget::Item {
+                id: "g2".into(),
+                side: DropSide::Before,
+            },
+        )
+        .unwrap_err();
 
         assert_eq!(error.code, "invalid_group_parent");
     }

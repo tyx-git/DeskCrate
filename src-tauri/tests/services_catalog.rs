@@ -5,7 +5,7 @@ use std::fs;
 use lib::{
     models::{
         AddAppRequest, AddCategoryRequest, AddGroupRequest, AppData, AppEXE, Category,
-        DeleteRequest, IconType, Item, MoveAppRequest, MoveGroupRequest, RenameRequest, RootItem,
+        DeleteRequest, DropSide, DropTarget, IconType, Item, RenameRequest, RootItem,
     },
     services::catalog,
     state::AppState,
@@ -655,12 +655,11 @@ fn an_app_can_be_moved_between_the_root_and_a_category() {
     let b = make("乙");
 
     // 甲 移进分类（分类此时还是空的，用「追加到末尾」）。
-    catalog::move_app(
+    catalog::drop_item(
         &state,
-        MoveAppRequest {
-            id: a.id.clone(),
-            parent_id: Some(category.id.clone()),
-            before_id: None,
+        a.id.clone(),
+        DropTarget::Container {
+            id: category.id.clone(),
         },
     )
     .expect("move should succeed");
@@ -679,12 +678,12 @@ fn an_app_can_be_moved_between_the_root_and_a_category() {
     assert_eq!(in_category, vec![a.id.clone()], "甲 进了分类");
 
     // 再把它挪回顶层，插到「乙」之前。
-    catalog::move_app(
+    catalog::drop_item(
         &state,
-        MoveAppRequest {
-            id: a.id.clone(),
-            parent_id: None,
-            before_id: Some(b.id.clone()),
+        a.id.clone(),
+        DropTarget::Item {
+            id: b.id.clone(),
+            side: DropSide::Before,
         },
     )
     .expect("move back should succeed");
@@ -723,13 +722,12 @@ fn reordering_inside_one_container_compensates_for_the_removal_shift() {
         );
     }
 
-    // 把「一」挪到末尾（参照为 null 即追加）。
-    catalog::move_app(
+    // 把「一」挪到末尾（容器目标即追加）。
+    catalog::drop_item(
         &state,
-        MoveAppRequest {
-            id: ids[0].clone(),
-            parent_id: Some(category.id.clone()),
-            before_id: None,
+        ids[0].clone(),
+        DropTarget::Container {
+            id: category.id.clone(),
         },
     )
     .expect("move should succeed");
@@ -752,12 +750,12 @@ fn reordering_inside_one_container_compensates_for_the_removal_shift() {
     );
 
     // 再把「三」挪到最前（插到「二」之前）。
-    catalog::move_app(
+    catalog::drop_item(
         &state,
-        MoveAppRequest {
-            id: ids[2].clone(),
-            parent_id: Some(category.id.clone()),
-            before_id: Some(ids[1].clone()),
+        ids[2].clone(),
+        DropTarget::Item {
+            id: ids[1].clone(),
+            side: DropSide::Before,
         },
     )
     .expect("move should succeed");
@@ -775,12 +773,12 @@ fn reordering_inside_one_container_compensates_for_the_removal_shift() {
         },
     )
     .unwrap();
-    catalog::move_app(
+    catalog::drop_item(
         &state,
-        MoveAppRequest {
-            id: ids[0].clone(),
-            parent_id: Some(category.id.clone()),
-            before_id: Some(group.id.clone()),
+        ids[0].clone(),
+        DropTarget::Item {
+            id: group.id.clone(),
+            side: DropSide::Before,
         },
     )
     .expect("应用可以插到同级分组之前");
@@ -823,12 +821,12 @@ fn an_app_can_be_reordered_within_one_top_level_row() {
     assert_eq!(order(), vec!["红", "绿", "蓝"]);
 
     // 「红」拖到「蓝」前面 —— 必须真的落在两个图标之间，而不是被并入行尾。
-    catalog::move_app(
+    catalog::drop_item(
         &state,
-        MoveAppRequest {
-            id: ids[0].clone(),
-            parent_id: None,
-            before_id: Some(ids[2].clone()),
+        ids[0].clone(),
+        DropTarget::Item {
+            id: ids[2].clone(),
+            side: DropSide::Before,
         },
     )
     .expect("move should succeed");
@@ -881,12 +879,12 @@ fn groups_can_be_reordered_among_mixed_siblings_without_losing_their_subtree() {
     )
     .unwrap();
 
-    catalog::move_group(
+    catalog::drop_item(
         &state,
-        MoveGroupRequest {
-            id: second.id.clone(),
-            parent_id: category.id.clone(),
-            before_id: Some(middle_app.id.clone()),
+        second.id.clone(),
+        DropTarget::Item {
+            id: middle_app.id.clone(),
+            side: DropSide::Before,
         },
     )
     .unwrap();
@@ -914,12 +912,11 @@ fn groups_can_be_reordered_among_mixed_siblings_without_losing_their_subtree() {
         "分组子树应整体保留"
     );
 
-    catalog::move_group(
+    catalog::drop_item(
         &state,
-        MoveGroupRequest {
-            id: first.id.clone(),
-            parent_id: category.id.clone(),
-            before_id: None,
+        first.id.clone(),
+        DropTarget::Container {
+            id: category.id.clone(),
         },
     )
     .unwrap();
@@ -957,16 +954,16 @@ fn moving_a_group_into_its_descendant_is_rejected_without_persisting() {
     )
     .unwrap();
 
-    let error = catalog::move_group(
+    let error = catalog::drop_item(
         &state,
-        MoveGroupRequest {
-            id: parent.id.clone(),
-            parent_id: category.id.clone(),
-            before_id: Some(child.id.clone()),
+        parent.id.clone(),
+        DropTarget::Item {
+            id: child.id.clone(),
+            side: DropSide::Before,
         },
     )
     .expect_err("不能把分组移到其子孙节点之前");
-    assert_eq!(error.code, "invalid_group_position");
+    assert_eq!(error.code, "invalid_group_parent");
     let data = catalog::get_all_data(&state).unwrap();
     assert!(find_group(&data, &parent.id).is_some());
     assert!(find_group(&data, &child.id).is_some());
@@ -999,12 +996,11 @@ fn moving_a_group_across_parent_containers_is_rejected() {
     )
     .unwrap();
 
-    let error = catalog::move_group(
+    let error = catalog::drop_item(
         &state,
-        MoveGroupRequest {
-            id: group.id.clone(),
-            parent_id: other_category.id,
-            before_id: None,
+        group.id.clone(),
+        DropTarget::Container {
+            id: other_category.id,
         },
     )
     .expect_err("本接口仅允许同级排序");
@@ -1022,16 +1018,9 @@ fn moving_an_unknown_app_reports_not_found() {
     let directory = TestDir::new("move-app-missing");
     let state = directory.state();
 
-    let error = catalog::move_app(
-        &state,
-        MoveAppRequest {
-            id: "no-such-app".to_owned(),
-            parent_id: None,
-            before_id: None,
-        },
-    )
-    .expect_err("未知应用应当报错");
-    assert_eq!(error.code, "app_not_found");
+    let error = catalog::drop_item(&state, "no-such-app".to_owned(), DropTarget::RootEnd)
+        .expect_err("未知应用应当报错");
+    assert_eq!(error.code, "item_not_found");
 }
 
 #[test]

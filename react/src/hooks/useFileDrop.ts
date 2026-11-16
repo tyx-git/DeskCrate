@@ -20,6 +20,11 @@ export function useFileDrop(): void {
     void (async () => {
       const stop = await backend.onFileDrop((event) => {
         const ui = useUiStore.getState()
+        // HTML5 内部拖拽也会触发原生 enter/over；此时不能显示文件投放遮罩。
+        if (ui.drag) {
+          ui.setFileDragging(false)
+          return
+        }
         if (event.type === 'enter' || event.type === 'over') {
           ui.setFileDragging(true)
           return

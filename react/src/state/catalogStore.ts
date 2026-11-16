@@ -31,11 +31,7 @@ interface CatalogState {
   deleteGroup: (id: string) => Promise<boolean>
   addApp: (parentId: string | null, sourcePath: string, name?: string, rootIndex?: number) => Promise<AppEXE | null>
   addApps: (parentId: string | null, sourcePaths: string[], rootIndex?: number) => Promise<AddAppsResponse>
-  moveApp: (id: string, parentId: string | null, beforeId: string | null) => Promise<boolean>
-  moveGroup: (id: string, parentId: string, beforeId: string | null) => Promise<boolean>
-  dropApp: (id: string, target: DropTarget) => Promise<boolean>
-  dropGroup: (id: string, target: DropTarget) => Promise<boolean>
-  dropCategory: (id: string, target: DropTarget) => Promise<boolean>
+  dropItem: (id: string, target: DropTarget) => Promise<boolean>
   renameApp: (id: string, name: string) => Promise<boolean>
   deleteApp: (id: string) => Promise<boolean>
   launchApp: (app: AppEXE) => Promise<void>
@@ -125,41 +121,9 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     })
   },
 
-  async moveApp(id, parentId, beforeId) {
+  async dropItem(id, target) {
     return run(set, get, false, async () => {
-      await backend.moveApp(id, parentId, beforeId)
-      await get().load()
-      return true
-    })
-  },
-
-  async moveGroup(id, parentId, beforeId) {
-    return run(set, get, false, async () => {
-      await backend.moveGroup(id, parentId, beforeId)
-      await get().load()
-      return true
-    })
-  },
-
-  async dropApp(id, target) {
-    return run(set, get, false, async () => {
-      await backend.dropApp(id, target)
-      await get().load()
-      return true
-    })
-  },
-
-  async dropGroup(id, target) {
-    return run(set, get, false, async () => {
-      await backend.dropGroup(id, target)
-      await get().load()
-      return true
-    })
-  },
-
-  async dropCategory(id, target) {
-    return run(set, get, false, async () => {
-      await backend.dropCategory(id, target)
+      await backend.dropItem(id, target)
       await get().load()
       return true
     })
@@ -238,9 +202,7 @@ async function restoreApp(state: CatalogState, snapshot: DeletedAppSnapshot): Pr
   const app = await state.addApp(snapshot.parentId, snapshot.sourcePath, snapshot.name, snapshot.rootIndex)
   if (!app) return
   if (snapshot.beforeId) {
-    await state.moveApp(app.id, snapshot.parentId, snapshot.beforeId)
-  } else if (snapshot.parentId === null) {
-    await state.moveApp(app.id, null, null)
+    await state.dropItem(app.id, { type: 'item', id: snapshot.beforeId, side: 'before' })
   }
   useUiStore.getState().pushToast('已恢复删除的应用', { icon: 'undo' })
 }

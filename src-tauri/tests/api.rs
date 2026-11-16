@@ -101,8 +101,7 @@ fn create_test_app(directory: &TestDir) -> tauri::App<tauri::test::MockRuntime> 
             commands::catalog::set_node_collapsed,
             add_app,
             add_apps,
-            commands::catalog::move_group,
-            commands::catalog::move_app,
+            commands::catalog::drop_item,
             commands::catalog::rename_app,
             commands::catalog::delete_app,
             commands::settings::get_settings,
@@ -162,8 +161,8 @@ fn catalog_and_settings_commands_use_the_documented_ipc_shape() {
     let sibling_id = sibling["id"].as_str().unwrap().to_owned();
     invoke(
         &window,
-        "move_group",
-        json!({"id": sibling_id, "parentId": category_id, "beforeId": group_id}),
+        "drop_item",
+        json!({"id": sibling_id, "target": {"type": "item", "id": group_id, "side": "before"}}),
     );
     let reordered = invoke(&window, "get_all_data", json!({}));
     assert_eq!(

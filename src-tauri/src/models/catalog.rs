@@ -73,39 +73,6 @@ pub struct SetNodeCollapsedRequest {
     pub is_collapsed: bool, // 是否折叠。
 }
 
-// 移动一个应用到新位置时由前端提交的请求数据。
-//
-// 拖拽改位置是「先摘下来、再插回去」两步，所以请求里只描述**目标**（父容器与
-// 下标），源位置由后端自己查 —— 前端不必维护一份位置索引，也就不会和落盘结果
-// 对不上。
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct MoveAppRequest {
-    pub id: String, // 要移动的应用 ID。
-
-    // 目标父容器：分类 ID、分组 ID，`null` 表示顶层。
-    //
-    // 与 `AddAppRequest.parent_id` 同一套语义：`Option` 而不是哨兵字符串。
-    pub parent_id: Option<String>,
-
-    // 参照节点：插到它**之前**。`null` 表示插到目标容器的末尾。
-    //
-    // 为什么用「参照节点」而不是下标：顶层应用是按**行**存放的，一个下标表达不了
-    // 「第几行的第几个」。而且摘掉自己会让后续元素的下标整体左移，前端很容易算
-    // 偏一位。以某个具体应用为参照则没有这些歧义。
-    pub before_id: Option<String>,
-}
-
-// 在原父容器中移动分组时由前端提交的请求。
-// `parent_id` 固定为该分组的当前父容器；服务层只允许同级重排，避免意外改变嵌套深度。
-#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct MoveGroupRequest {
-    pub id: String,
-    pub parent_id: String,
-    pub before_id: Option<String>,
-}
-
 // 拖拽落点相对于目标节点的位置。
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -121,22 +88,12 @@ pub enum DropSide {
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum DropTarget {
-    // 放到某个应用之前/之后。
-    App {
-        id: String,
-        side: DropSide,
-    },
-    // 追加到分类/分组；分组拖拽时 `side` 表示放在同级分组的之前/之后。
-    Container {
-        id: String,
-        #[serde(default)]
-        side: Option<DropSide>,
-    },
+    // 插到同级的应用或分组之前/之后；父容器由后端查。
+    Item { id: String, side: DropSide },
+    // 追加到分类/分组末尾。
+    Container { id: String },
     // 放到第 `index` 个根节点之前/之后。
-    Root {
-        index: usize,
-        side: DropSide,
-    },
+    Root { index: usize, side: DropSide },
     // 追加到根列表末尾。
     RootEnd,
 }

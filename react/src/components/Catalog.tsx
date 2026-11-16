@@ -16,76 +16,119 @@ interface Hit {
   el: HTMLElement
 }
 
+interface PointerDrag {
+  drag: DragState
+  pointerId: number
+  startX: number
+  startY: number
+  source: HTMLElement
+  ghost: HTMLElement | null
+  active: boolean
+}
+
+function createDragGhost(source: HTMLElement): HTMLElement {
+  const isNode = source.classList.contains('node')
+  const row = isNode ? source.querySelector<HTMLElement>('.row') : null
+  const rect = (row ?? source).getBoundingClientRect()
+  const ghost = source.cloneNode(true) as HTMLElement
+  ghost.classList.add('drag-ghost')
+  ghost.querySelector('.node-body')?.remove()
+  ghost.style.width = `${rect.width}px`
+  ghost.style.height = `${rect.height}px`
+  document.body.appendChild(ghost)
+  return ghost
+}
+
 function rootIndexOf(el: HTMLElement, fallback: number): number {
   return el.dataset.rootIndex !== undefined ? Number(el.dataset.rootIndex) : fallback
 }
 
-function appSide(e: React.DragEvent, el: HTMLElement): DropSide {
+function appSide(clientX: number, el: HTMLElement): DropSide {
   const rect = el.getBoundingClientRect()
-  return e.clientX < rect.left + rect.width / 2 ? 'before' : 'after'
+  return clientX < rect.left + rect.width / 2 ? 'before' : 'after'
 }
 
-function nodeSide(e: React.DragEvent, el: HTMLElement): DropSide {
+function nodeSide(clientY: number, el: HTMLElement): DropSide {
   const rect = el.getBoundingClientRect()
-  return e.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
+  return clientY < rect.top + rect.height / 2 ? 'before' : 'after'
 }
 
-function computeHit(e: React.DragEvent, drag: DragState, catalog: HTMLElement): Hit | null {
-  const target = e.target as HTMLElement
-  const data = useCatalogStore.getState().data
-
-  if (drag.kind === 'app') {
-    const appEl = target.closest<HTMLElement>('.app')
-    if (appEl?.dataset.app) {
-      if (appEl.dataset.app === drag.id) return null
-      return {
-        target: { type: 'app', id: appEl.dataset.app, side: appSide(e, appEl) },
-        el: appEl,
-      }
+function nearestAppInGrid(grid: HTMLElement, clientX: number, clientY: number): HTMLElement | null {
+  let nearest: HTMLElement | null = null
+  let distance = Infinity
+  for (const app of grid.querySelectorAll<HTMLElement>('.app[data-app]')) {
+    const rect = app.getBoundingClientRect()
+    const dx = clientX - (rect.left + rect.width / 2)
+    const dy = clientY - (rect.top + rect.height / 2)
+    const next = dx * dx + dy * dy
+    if (next < distance) {
+      distance = next
+      nearest = app
     }
-
-    const gridEl = target.closest<HTMLElement>('.icon-grid')
-    if (gridEl) {
-      const containerId = gridEl.dataset.container
-      if (containerId) {
-        return { target: { type: 'container', id: containerId }, el: gridEl }
-      }
-      return {
-        target: { type: 'root', index: rootIndexOf(gridEl, data.items.length), side: 'before' },
-        el: gridEl,
-      }
-    }
-
-    const rowEl = target.closest<HTMLElement>('.row')
-    if (rowEl?.dataset.id) {
-      return { target: { type: 'container', id: rowEl.dataset.id }, el: rowEl }
-    }
-
-    return rootHit(e, catalog)
   }
+  return nearest
+}
+
+function computeHit(clientX: number, clientY: number, drag: DragState, catalog: HTMLElement): Hit | null {
+  const target = document.elementFromPoint(clientX, clientY)
+  if (!(target instanceof HTMLElement) || !catalog.contains(target)) return null
 
   if (drag.kind === 'Group') {
-    const nodeEl = target.closest<HTMLElement>('.node[data-kind="Group"]')
-    if (!nodeEl?.dataset.node || nodeEl.dataset.node === drag.id) return null
+    const rowEl = target.closest<HTMLElement>('.row[data-id]')
+    const nodeEl = rowEl?.closest<HTMLElement>('.node[data-kind="Group"]')
+    if (!rowEl || !nodeEl?.dataset.node || nodeEl.dataset.node === drag.id) return null
     return {
-      target: { type: 'container', id: nodeEl.dataset.node, side: nodeSide(e, nodeEl) },
+      target: { type: 'item', id: nodeEl.dataset.node, side: nodeSide(clientY, rowEl) },
       el: nodeEl,
     }
   }
 
   if (drag.kind === 'Category') {
-    return rootHit(e, catalog)
+    return rootHit(clientY, catalog)
   }
 
-  return null
+  const appEl = target.closest<HTMLElement>('.app[data-app]')
+  if (appEl?.dataset.app) {
+    if (appEl.dataset.app === drag.id) return null
+    return {
+      target: { type: 'item', id: appEl.dataset.app, side: appSide(clientX, appEl) },
+      el: appEl,
+    }
+  }
+
+  const gridEl = target.closest<HTMLElement>('.icon-grid')
+  if (gridEl) {
+    const nearest = nearestAppInGrid(gridEl, clientX, clientY)
+    if (nearest?.dataset.app && nearest.dataset.app !== drag.id) {
+      return {
+        target: { type: 'item', id: nearest.dataset.app, side: appSide(clientX, nearest) },
+        el: nearest,
+      }
+    }
+    const containerId = gridEl.dataset.container
+    if (containerId) {
+      return { target: { type: 'container', id: containerId }, el: gridEl }
+    }
+    return {
+      target: { type: 'root', index: rootIndexOf(gridEl, 0), side: 'before' },
+      el: gridEl,
+    }
+  }
+
+  const rowEl = target.closest<HTMLElement>('.row[data-id]')
+  if (rowEl?.dataset.id) {
+    return { target: { type: 'container', id: rowEl.dataset.id }, el: rowEl }
+  }
+
+  return rootHit(clientY, catalog)
 }
 
-function rootHit(e: React.DragEvent, catalog: HTMLElement): Hit | null {
+function rootHit(clientY: number, catalog: HTMLElement): Hit | null {
   const roots = Array.from(catalog.querySelectorAll<HTMLElement>(':scope > .node'))
   for (let i = 0; i < roots.length; i++) {
     const target = roots[i]
     const rect = target.getBoundingClientRect()
-    if (e.clientY < rect.top + rect.height / 2) {
+    if (clientY < rect.top + rect.height / 2) {
       return {
         target: { type: 'root', index: rootIndexOf(target, i), side: 'before' },
         el: target,
@@ -114,16 +157,12 @@ function markHit(hit: Hit): void {
   const { target, el } = hit
 
   if (target.type === 'container') {
-    if (target.side) {
-      el.classList.add(target.side === 'before' ? 'drop-before' : 'drop-after')
-    } else {
-      el.classList.add('drop-into')
-    }
+    el.classList.add('drop-into')
     return
   }
 
   if (target.type === 'rootEnd') {
-    el.classList.add('drop-into')
+    if (el !== el.ownerDocument.body) el.classList.add('drop-into')
     return
   }
 
@@ -135,75 +174,133 @@ export function Catalog() {
   const query = useUiStore((s) => s.query)
   const catalogRef = useRef<HTMLDivElement>(null)
   const dropRef = useRef<DropTarget | null>(null)
+  const pointerRef = useRef<PointerDrag | null>(null)
+  const suppressClickRef = useRef(false)
 
-  const onDragStart = (e: React.DragEvent) => {
-    const target = e.target as HTMLElement
-    const appEl = target.closest<HTMLElement>('.app')
-    const nodeEl = target.closest<HTMLElement>('.node')
+  useEffect(() => {
+    const finish = (event: PointerEvent, dropped: boolean) => {
+      const pointer = pointerRef.current
+      if (!pointer || event.pointerId !== pointer.pointerId) return
+      pointerRef.current = null
 
-    let drag: DragState
+      const catalog = catalogRef.current
+      if (catalog) clearMarks(catalog)
+      pointer.ghost?.remove()
+
+      try {
+        if (pointer.source.hasPointerCapture(pointer.pointerId)) {
+          pointer.source.releasePointerCapture(pointer.pointerId)
+        }
+      } catch {
+        // capture may already be released when the source unmounts
+      }
+
+      if (pointer.active) {
+        if (dropped) {
+          const target = dropRef.current
+          if (target) void useCatalogStore.getState().dropItem(pointer.drag.id, target)
+        }
+        useUiStore.getState().endDrag()
+        globalThis.setTimeout(() => {
+          suppressClickRef.current = false
+        }, 0)
+      }
+      dropRef.current = null
+    }
+
+    const onPointerMove = (event: PointerEvent) => {
+      const pointer = pointerRef.current
+      if (!pointer || event.pointerId !== pointer.pointerId) return
+
+      if (!pointer.active) {
+        const dx = event.clientX - pointer.startX
+        const dy = event.clientY - pointer.startY
+        if (Math.hypot(dx, dy) < 4) return
+        pointer.active = true
+        suppressClickRef.current = true
+        useUiStore.getState().startDrag(pointer.drag)
+        pointer.ghost = createDragGhost(pointer.source)
+      }
+
+      event.preventDefault()
+      if (pointer.ghost) {
+        pointer.ghost.style.left = `${event.clientX + 12}px`
+        pointer.ghost.style.top = `${event.clientY + 12}px`
+      }
+
+      const catalog = catalogRef.current
+      if (!catalog) return
+      const hit = computeHit(event.clientX, event.clientY, pointer.drag, catalog)
+      clearMarks(catalog)
+      if (hit) markHit(hit)
+      dropRef.current = hit?.target ?? null
+
+      const box = catalog.getBoundingClientRect()
+      if (event.clientY < box.top + 24) catalog.scrollTop -= 10
+      else if (event.clientY > box.bottom - 24) catalog.scrollTop += 10
+    }
+
+    const onPointerUp = (event: PointerEvent) => finish(event, true)
+    const onPointerCancel = (event: PointerEvent) => finish(event, false)
+
+    window.addEventListener('pointermove', onPointerMove, { passive: false })
+    window.addEventListener('pointerup', onPointerUp)
+    window.addEventListener('pointercancel', onPointerCancel)
+
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', onPointerUp)
+      window.removeEventListener('pointercancel', onPointerCancel)
+      pointerRef.current?.ghost?.remove()
+      if (pointerRef.current?.active) useUiStore.getState().endDrag()
+      pointerRef.current = null
+    }
+  }, [])
+
+  const onPointerDown = (event: React.PointerEvent) => {
+    if (event.button !== 0) return
+    const target = event.target as HTMLElement
+    if (target.closest('button, input, textarea, select, .rename-input, [data-no-drag]')) return
+
+    const appEl = target.closest<HTMLElement>('.app[data-app]')
+    const rowEl = appEl ? null : target.closest<HTMLElement>('.row[data-id]')
+    const nodeEl = rowEl?.closest<HTMLElement>('.node[data-kind]')
+
+    let drag: DragState | null = null
     if (appEl?.dataset.app) {
       drag = { kind: 'app', id: appEl.dataset.app }
-    } else if (nodeEl?.dataset.node && (nodeEl.dataset.kind === 'Group' || nodeEl.dataset.kind === 'Category')) {
-      drag = { kind: nodeEl.dataset.kind, id: nodeEl.dataset.node }
     } else {
-      e.preventDefault()
-      return
-    }
-
-    e.dataTransfer.effectAllowed = 'move'
-    try {
-      e.dataTransfer.setData('text/plain', drag.id)
-    } catch {
-      /* 某些环境不允许 setData，忽略 */
-    }
-    useUiStore.getState().startDrag(drag)
-  }
-
-  const onDragOver = (e: React.DragEvent) => {
-    const drag = useUiStore.getState().drag
-    const catalog = catalogRef.current
-    if (!drag || !catalog) return
-    e.preventDefault()
-
-    const hit = computeHit(e, drag, catalog)
-    clearMarks(catalog)
-    if (hit) {
-      e.dataTransfer.dropEffect = 'move'
-      markHit(hit)
-    } else {
-      e.dataTransfer.dropEffect = 'none'
-    }
-    dropRef.current = hit?.target ?? null
-  }
-
-  const onDrop = (e: React.DragEvent) => {
-    e.preventDefault()
-    const catalog = catalogRef.current
-    const drag = useUiStore.getState().drag
-    const target = dropRef.current
-    if (catalog) clearMarks(catalog)
-    dropRef.current = null
-
-    if (drag && target) {
-      const catalogStore = useCatalogStore.getState()
-      if (drag.kind === 'app') {
-        void catalogStore.dropApp(drag.id, target)
-      } else if (drag.kind === 'Group' && target.type === 'container' && target.side) {
-        void catalogStore.dropGroup(drag.id, target)
-      } else if (drag.kind === 'Category' && (target.type === 'root' || target.type === 'rootEnd')) {
-        void catalogStore.dropCategory(drag.id, target)
+      const kind = nodeEl?.dataset.kind
+      if (nodeEl?.dataset.node && (kind === 'Group' || kind === 'Category')) {
+        drag = { kind, id: nodeEl.dataset.node }
       }
     }
+    if (!drag) return
 
-    useUiStore.getState().endDrag()
+    dropRef.current = null
+    suppressClickRef.current = false
+    const source = (appEl ?? nodeEl) as HTMLElement
+    pointerRef.current = {
+      drag,
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      source,
+      ghost: null,
+      active: false,
+    }
+    try {
+      source.setPointerCapture(event.pointerId)
+    } catch {
+      // pointer capture is best-effort; window listeners still handle the drag
+    }
   }
 
-  const onDragEnd = () => {
-    const catalog = catalogRef.current
-    if (catalog) clearMarks(catalog)
-    dropRef.current = null
-    useUiStore.getState().endDrag()
+  const onClickCapture = (event: React.MouseEvent) => {
+    if (!suppressClickRef.current) return
+    suppressClickRef.current = false
+    event.preventDefault()
+    event.stopPropagation()
   }
 
   return (
@@ -211,10 +308,8 @@ export function Catalog() {
       className="catalog dc-scroll"
       ref={catalogRef}
       tabIndex={-1}
-      onDragStart={onDragStart}
-      onDragOver={onDragOver}
-      onDrop={onDrop}
-      onDragEnd={onDragEnd}
+      onPointerDown={onPointerDown}
+      onClickCapture={onClickCapture}
       onScroll={() => useUiStore.getState().closeCtx()}
     >
       {query.trim() ? (
@@ -270,7 +365,6 @@ function AppCell({ app }: { app: AppEXE }) {
   return (
     <div
       className={`app${dragging ? ' is-dragging' : ''}${launching ? ' is-launching' : ''}`}
-      draggable
       data-app={app.id}
       title={`${app.name}\n${app.sourcePath}`}
       onClick={() => void launchApp(app)}
@@ -317,7 +411,6 @@ function Node({
         className={`row ${kind === 'Category' ? 'cat-row' : 'grp-row'}${dragging ? ' is-dragging' : ''}`}
         data-id={node.id}
         data-drop-id={node.id}
-        draggable={!isRenaming}
         style={indent ? { paddingLeft: `calc(var(--pad-x) + ${indent}px)` } : undefined}
         onClick={() => void toggleCollapse(node.id, !node.isCollapsed)}
       >

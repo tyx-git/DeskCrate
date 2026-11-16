@@ -172,6 +172,9 @@ svg { display: block; }
 @keyframes pending { 0%, 100% { opacity: 0.45; } 50% { opacity: 0.9; } }
 .app.is-dragging { opacity: 0.35; }
 .row.is-dragging { opacity: 0.35; }
+.drag-ghost { position: fixed; z-index: 120; margin: 0; pointer-events: none; opacity: 0.94; filter: drop-shadow(0 10px 22px rgba(18, 24, 22, 0.16)); transform: rotate(-1deg); will-change: transform; }
+.drag-ghost .row { background: var(--paper-deep); border-radius: 8px; }
+.drag-ghost .row-more { display: none; }
 
 /* 搜索结果 */
 .results { padding-top: 4px; }

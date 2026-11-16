@@ -62,16 +62,8 @@ export interface Backend {
   /** parentId 为 null 表示顶层；rootIndex 指定插到第几个根节点之前。 */
   addApp(parentId: string | null, sourcePath: string, name?: string, rootIndex?: number): Promise<AppEXE>
   addApps(parentId: string | null, sourcePaths: string[], rootIndex?: number): Promise<AddAppsResponse>
-  /** beforeId 是参照节点（插到它之前），null 表示目标容器末尾。 */
-  moveApp(id: string, parentId: string | null, beforeId: string | null): Promise<void>
-  /** 分组只允许在原父容器内同级重排。 */
-  moveGroup(id: string, parentId: string, beforeId: string | null): Promise<void>
-  /** 拖拽应用；后端根据落点完成删/插与根下标校正。 */
-  dropApp(id: string, target: DropTarget): Promise<void>
-  /** 拖拽分组；后端只允许同父级重排。 */
-  dropGroup(id: string, target: DropTarget): Promise<void>
-  /** 拖拽分类；后端完成根列表重排。 */
-  dropCategory(id: string, target: DropTarget): Promise<void>
+  /** 统一拖拽入口；后端按节点类型校验并完成删/插与根下标校正。 */
+  dropItem(id: string, target: DropTarget): Promise<void>
   renameApp(id: string, name: string): Promise<AppEXE>
   deleteApp(id: string): Promise<void>
   launchIcon(id: string): Promise<void>

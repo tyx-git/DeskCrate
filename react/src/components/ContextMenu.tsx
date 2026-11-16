@@ -153,7 +153,8 @@ function MoveMenu({ appId }: { appId: string }) {
           key={c.id || 'root'}
           onClick={() => {
             ui.closeCtx()
-            void catalog.moveApp(appId, c.id || null, null).then((ok) => {
+            const target = c.id ? ({ type: 'container', id: c.id } as const) : ({ type: 'rootEnd' } as const)
+            void catalog.dropItem(appId, target).then((ok) => {
               if (ok) ui.pushToast('已移动', { icon: 'move' })
             })
           }}

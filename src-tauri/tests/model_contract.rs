@@ -1,6 +1,6 @@
 use lib::models::{
     AddAppRequest, AddCategoryRequest, AddGroupRequest, AppData, AppEXE, AppError, Category,
-    DeleteRequest, Group, IconType, Item, MoveGroupRequest, RenameRequest, RootItem,
+    DeleteRequest, DropSide, DropTarget, Group, IconType, Item, RenameRequest, RootItem,
 };
 use serde_json::json;
 
@@ -78,17 +78,21 @@ fn all_icon_types_use_the_persisted_pascal_case_values() {
 }
 
 #[test]
-fn move_group_request_uses_camel_case_names() {
-    let request: MoveGroupRequest = serde_json::from_value(serde_json::json!({
-        "id": "group-id",
-        "parentId": "parent-id",
-        "beforeId": "sibling-id"
+fn drop_target_uses_camel_case_and_internal_tags() {
+    let target: DropTarget = serde_json::from_value(serde_json::json!({
+        "type": "item",
+        "id": "sibling-id",
+        "side": "before"
     }))
-    .expect("camelCase request should deserialize");
+    .expect("camelCase drop target should deserialize");
 
-    assert_eq!(request.id, "group-id");
-    assert_eq!(request.parent_id, "parent-id");
-    assert_eq!(request.before_id.as_deref(), Some("sibling-id"));
+    assert_eq!(
+        target,
+        DropTarget::Item {
+            id: "sibling-id".to_owned(),
+            side: DropSide::Before,
+        }
+    );
 }
 
 #[test]

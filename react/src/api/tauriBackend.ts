@@ -45,14 +45,7 @@ export const tauriBackend: Backend = {
     invoke<AppEXE>(COMMANDS.addApp, { parentId, sourcePath, name, rootIndex }),
   addApps: (parentId: string | null, sourcePaths: string[], rootIndex?: number) =>
     invoke<AddAppsResponse>(COMMANDS.addApps, { parentId, sourcePaths, rootIndex }),
-  moveApp: (id: string, parentId: string | null, beforeId: string | null) =>
-    invoke<void>(COMMANDS.moveApp, { id, parentId, beforeId }),
-  moveGroup: (id: string, parentId: string, beforeId: string | null) =>
-    invoke<void>(COMMANDS.moveGroup, { id, parentId, beforeId }),
-  dropApp: (id: string, target: DropTarget) => invoke<void>(COMMANDS.dropApp, { id, target }),
-  dropGroup: (id: string, target: DropTarget) => invoke<void>(COMMANDS.dropGroup, { id, target }),
-  dropCategory: (id: string, target: DropTarget) =>
-    invoke<void>(COMMANDS.dropCategory, { id, target }),
+  dropItem: (id: string, target: DropTarget) => invoke<void>(COMMANDS.dropItem, { id, target }),
   renameApp: (id: string, name: string) => invoke<AppEXE>(COMMANDS.renameApp, { id, name }),
   deleteApp: (id: string) => invoke<void>(COMMANDS.deleteApp, { id }),
   launchIcon: (id: string) => invoke<void>(COMMANDS.launchIcon, { id }),

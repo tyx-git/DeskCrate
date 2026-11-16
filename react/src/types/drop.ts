@@ -2,7 +2,7 @@
 export type DropSide = 'before' | 'after'
 
 export type DropTarget =
-  | { type: 'app'; id: string; side: DropSide }
-  | { type: 'container'; id: string; side?: DropSide }
+  | { type: 'item'; id: string; side: DropSide }
+  | { type: 'container'; id: string }
   | { type: 'root'; index: number; side: DropSide }
   | { type: 'rootEnd' }

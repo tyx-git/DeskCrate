@@ -17,6 +17,27 @@ pub(crate) fn find_category_mut<'a>(data: &'a mut AppData, id: &str) -> Option<&
     })
 }
 
+// 节点类型：拖拽入口用它决定由哪个服务分支处理。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ItemKind {
+    App,
+    Group,
+    Category,
+}
+
+pub(crate) fn item_kind(data: &AppData, id: &str) -> Option<ItemKind> {
+    if find_category(data, id).is_some() {
+        return Some(ItemKind::Category);
+    }
+    if find_group(data, id).is_some() {
+        return Some(ItemKind::Group);
+    }
+    if find_app(data, id).is_some() {
+        return Some(ItemKind::App);
+    }
+    None
+}
+
 // 在顶层某一行应用里，插到参照应用之前。
 pub(crate) fn insert_into_root_row(data: &mut AppData, before_id: &str, app: AppEXE) -> bool {
     for item in data.items.iter_mut() {
@@ -83,12 +104,6 @@ fn item_id(item: &Item) -> &str {
         Item::Group(group) => &group.id,
         Item::App(app) => &app.id,
     }
-}
-
-pub(crate) fn group_contains_id(group: &Group, id: &str) -> bool {
-    group.children.iter().any(|item| {
-        item_id(item) == id || matches!(item, Item::Group(child) if group_contains_id(child, id))
-    })
 }
 
 // 追加到顶层末尾：末行是应用行就并入，否则新起一行。
