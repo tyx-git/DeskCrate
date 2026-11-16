@@ -22,6 +22,7 @@ interface PointerDrag {
   startX: number
   startY: number
   source: HTMLElement
+  captureTarget: HTMLElement
   ghost: HTMLElement | null
   active: boolean
 }
@@ -188,8 +189,8 @@ export function Catalog() {
       pointer.ghost?.remove()
 
       try {
-        if (pointer.source.hasPointerCapture(pointer.pointerId)) {
-          pointer.source.releasePointerCapture(pointer.pointerId)
+        if (pointer.captureTarget.hasPointerCapture(pointer.pointerId)) {
+          pointer.captureTarget.releasePointerCapture(pointer.pointerId)
         }
       } catch {
         // capture may already be released when the source unmounts
@@ -280,17 +281,19 @@ export function Catalog() {
     dropRef.current = null
     suppressClickRef.current = false
     const source = (appEl ?? nodeEl) as HTMLElement
+    const captureTarget = (appEl ?? rowEl) as HTMLElement
     pointerRef.current = {
       drag,
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
       source,
+      captureTarget,
       ghost: null,
       active: false,
     }
     try {
-      source.setPointerCapture(event.pointerId)
+      captureTarget.setPointerCapture(event.pointerId)
     } catch {
       // pointer capture is best-effort; window listeners still handle the drag
     }
