@@ -28,6 +28,8 @@ fn fixture_directory_can_be_used_as_a_real_folder_application_source() {
             parent_id: Some(category.id),
             source_path: source.to_string_lossy().into_owned(),
             name: None,
+            arguments: None,
+            working_dir: None,
             root_index: None,
         },
     )

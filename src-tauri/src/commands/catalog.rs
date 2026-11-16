@@ -3,7 +3,7 @@ use crate::{
     models::{
         AddAppRequest, AddAppsRequest, AddAppsResponse, AddCategoryRequest, AddGroupRequest,
         AppData, AppEXE, Category, DeleteRequest, DropTarget, Group, RenameRequest,
-        SetNodeCollapsedRequest,
+        SetNodeCollapsedRequest, UpdateAppRequest,
     },
     services,
     state::AppState,
@@ -90,6 +90,8 @@ pub fn add_app(
     parent_id: Option<String>,
     source_path: String,
     name: Option<String>,
+    arguments: Option<String>,
+    working_dir: Option<String>,
     root_index: Option<usize>,
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
@@ -100,6 +102,8 @@ pub fn add_app(
             parent_id,
             source_path,
             name,
+            arguments,
+            working_dir,
             root_index,
         },
     )?;
@@ -124,6 +128,8 @@ pub fn add_app(
 pub fn add_apps(
     parent_id: Option<String>,
     source_paths: Vec<String>,
+    arguments: Option<String>,
+    working_dir: Option<String>,
     root_index: Option<usize>,
     state: tauri::State<'_, AppState>,
     app: tauri::AppHandle,
@@ -133,6 +139,8 @@ pub fn add_apps(
         AddAppsRequest {
             parent_id,
             source_paths,
+            arguments,
+            working_dir,
             root_index,
         },
     )?;
@@ -156,14 +164,37 @@ pub fn drop_item(
     services::catalog::drop_item(state.inner(), id, target)
 }
 
-// 按ID重命名应用，并返回更新后的应用对象。
+// 编辑应用：显示名称、来源、启动参数与工作目录。
+//
+// 来源变化时 service 会重建图标；若新来源是网址且暂时只有占位图标，
+// 和新增路径一样把补抓图标排进后台队列。返回值只表示成功与否。
 #[tauri::command]
-pub fn rename_app(
+pub fn update_app(
     id: String,
     name: String,
+    source_path: String,
+    arguments: Option<String>,
+    working_dir: Option<String>,
     state: tauri::State<'_, AppState>,
-) -> AppResult<AppEXE> {
-    services::catalog::rename_app(state.inner(), RenameRequest { id, name })
+    app: tauri::AppHandle,
+) -> AppResult<()> {
+    let app_id = id.clone();
+    let outcome = services::catalog::update_app(
+        state.inner(),
+        UpdateAppRequest {
+            id,
+            name,
+            source_path,
+            arguments,
+            working_dir,
+        },
+    )?;
+
+    if outcome.needs_url_icon {
+        services::url_icon_queue::enqueue(state.inner(), &app, app_id);
+    }
+
+    Ok(())
 }
 
 // 按ID删除应用。

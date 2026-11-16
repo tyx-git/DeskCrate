@@ -1,5 +1,5 @@
 // 前端用到的全部后端能力，与 src-tauri 的命令一一对应。
-import type { AddAppsResponse, AppData, AppEXE, Category, Group } from '../types/catalog'
+import type { AddAppsResponse, AppData, AppEXE, Category, Group, UpdateAppInput } from '../types/catalog'
 import type { DropTarget } from '../types/drop'
 import type { Settings, Theme, ViewMode, WindowGeometry, WindowInitResponse } from '../types/settings'
 
@@ -60,11 +60,25 @@ export interface Backend {
   deleteGroup(id: string): Promise<void>
   setNodeCollapsed(id: string, isCollapsed: boolean): Promise<void>
   /** parentId 为 null 表示顶层；rootIndex 指定插到第几个根节点之前。 */
-  addApp(parentId: string | null, sourcePath: string, name?: string, rootIndex?: number): Promise<AppEXE>
-  addApps(parentId: string | null, sourcePaths: string[], rootIndex?: number): Promise<AddAppsResponse>
+  addApp(
+    parentId: string | null,
+    sourcePath: string,
+    name?: string,
+    argumentsText?: string,
+    workingDir?: string,
+    rootIndex?: number,
+  ): Promise<AppEXE>
+  addApps(
+    parentId: string | null,
+    sourcePaths: string[],
+    argumentsText?: string,
+    workingDir?: string,
+    rootIndex?: number,
+  ): Promise<AddAppsResponse>
   /** 统一拖拽入口；后端按节点类型校验并完成删/插与根下标校正。 */
   dropItem(id: string, target: DropTarget): Promise<void>
-  renameApp(id: string, name: string): Promise<AppEXE>
+  /** 编辑应用；来源变化时后端重建图标，返回成功或抛错。 */
+  updateApp(input: UpdateAppInput): Promise<void>
   deleteApp(id: string): Promise<void>
   launchIcon(id: string): Promise<void>
 

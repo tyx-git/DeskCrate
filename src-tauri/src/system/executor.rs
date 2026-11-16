@@ -25,6 +25,7 @@ pub(crate) fn launch(
     arguments: Option<&str>,
 ) -> AppResult<()> {
     validate_target_path(target_path)?;
+    validate_working_dir(working_dir)?;
 
     if should_use_shell(target_path) {
         shell_open(target_path, working_dir, arguments)
@@ -145,7 +146,29 @@ fn validate_target_path(target_path: &Path) -> AppResult<()> {
         target_path.as_os_str(),
         "exec_invalid_target",
         "启动目标路径",
-    )
+    )?;
+
+    if !path::is_url_target(target_path) && !target_path.exists() {
+        return Err(AppError::new(
+            "target_not_found",
+            format!("启动目标不存在: {}", target_path.display()),
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_working_dir(working_dir: Option<&Path>) -> AppResult<()> {
+    if let Some(directory) = non_empty_path(working_dir) {
+        if !directory.is_dir() {
+            return Err(AppError::new(
+                "working_dir_not_found",
+                format!("工作目录不存在或不是文件夹: {}", directory.display()),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 fn non_empty_path(path: Option<&Path>) -> Option<&Path> {

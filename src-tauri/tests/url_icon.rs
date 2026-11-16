@@ -33,6 +33,8 @@ fn url_apps_cache_a_real_site_icon_and_land_at_the_top_level() {
                 parent_id: None,
                 source_path: url.to_owned(),
                 name: None,
+                arguments: None,
+                working_dir: None,
                 root_index: None,
             },
         )

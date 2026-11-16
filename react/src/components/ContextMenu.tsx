@@ -63,7 +63,7 @@ function TargetMenu({ type, id }: { type: CtxTargetType; id: string }) {
           if (loc) void catalog.launchApp(loc.app)
         },
       },
-      { key: 'rename', label: '重命名', glyph: 'pencil', onClick: () => ui.openDialog({ mode: 'rename-app', id }) },
+      { key: 'edit', label: '编辑', glyph: 'pencil', onClick: () => ui.openDialog({ mode: 'edit-app', id }) },
       { key: 'move', label: '移动到…', glyph: 'move', arrow: true, onClick: () => ui.openMoveMenu(id) },
       { key: 'sep', label: '', glyph: 'x', onClick: () => {} },
       {

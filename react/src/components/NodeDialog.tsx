@@ -1,4 +1,4 @@
-// 面板内对话框：添加应用、新建分类/分组、重命名应用与删除确认。
+// 面板内对话框：添加/编辑应用、新建分类/分组与删除确认。
 import { useEffect, useRef, useState } from 'react'
 
 import {
@@ -29,7 +29,7 @@ export function NodeDialog() {
 
 function dialogKey(d: DialogState): string {
   if (d.mode === 'new-group') return `new-group:${d.parentId}`
-  if (d.mode === 'rename-app' || d.mode === 'delete-node') return `${d.mode}:${d.id}`
+  if (d.mode === 'edit-app' || d.mode === 'delete-node') return `${d.mode}:${d.id}`
   return d.mode
 }
 
@@ -40,11 +40,18 @@ function DialogForm({ dialog }: { dialog: DialogState }) {
   const catalog = useCatalogStore.getState()
 
   const containers = flattenContainers(data)
-  const [source, setSource] = useState(dialog.mode === 'add' ? (dialog.source ?? '') : '')
-  const [name, setName] = useState(initialName(dialog, data))
+  const app = dialog.mode === 'edit-app' ? locateApp(data, dialog.id)?.app : undefined
+  const [source, setSource] = useState(
+    dialog.mode === 'add' ? (dialog.source ?? '') : (app?.sourcePath ?? ''),
+  )
+  const [name, setName] = useState(
+    dialog.mode === 'add' ? (dialog.name ?? '') : (app?.name ?? ''),
+  )
+  const [argumentsText, setArgumentsText] = useState(app?.arguments ?? '')
+  const [workingDir, setWorkingDir] = useState(app?.workingDir ?? '')
   const [parent, setParent] = useState(dialog.mode === 'add' ? (dialog.parentId ?? '') : '')
   const [error, setError] = useState('')
-  const firstRef = useRef<HTMLTextAreaElement | HTMLInputElement>(null)
+  const firstRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null)
 
   useEffect(() => {
     firstRef.current?.focus()
@@ -52,20 +59,37 @@ function DialogForm({ dialog }: { dialog: DialogState }) {
   }, [dialog.mode])
 
   const fail = (msg: string) => setError(msg)
+  const optional = (value: string) => value.trim() || undefined
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
+
     if (dialog.mode === 'add') {
       const lines = source.split('\n').map((s) => s.trim()).filter(Boolean)
       if (lines.length === 0) return fail('来源路径或网址不能为空')
       const trimmedName = name.trim()
       if (trimmedName && lines.length > 1) return fail('批量导入时不能指定统一名称，请留空')
       const parentId = parent || null
-      const res = await catalog.addApps(parentId, lines, dialog.rootIndex)
-      if (trimmedName && lines.length === 1 && res.added.length === 1) {
-        await catalog.renameApp(res.added[0].id, trimmedName)
+      const args = optional(argumentsText)
+      const directory = optional(workingDir)
+
+      if (lines.length === 1) {
+        const created = await catalog.addApp(
+          parentId,
+          lines[0],
+          trimmedName || undefined,
+          args,
+          directory,
+          dialog.rootIndex,
+        )
+        if (!created) return
+        closeDialog()
+        ui.pushToast(`已添加「${created.name}」`, { icon: 'plus' })
+        return
       }
+
+      const res = await catalog.addApps(parentId, lines, args, directory, dialog.rootIndex)
       if (res.failed.length > 0) {
         setSource(res.failed.map((f) => f.sourcePath).join('\n'))
         fail(
@@ -101,11 +125,20 @@ function DialogForm({ dialog }: { dialog: DialogState }) {
       return
     }
 
-    if (dialog.mode === 'rename-app') {
+    if (dialog.mode === 'edit-app') {
       const trimmed = name.trim()
       if (!trimmed) return fail('应用名称不能为空')
-      const ok = await catalog.renameApp(dialog.id, trimmed)
-      if (ok) closeDialog()
+      if (!source.trim()) return fail('来源路径或网址不能为空')
+      const ok = await catalog.updateApp({
+        id: dialog.id,
+        name: trimmed,
+        sourcePath: source.trim(),
+        arguments: optional(argumentsText),
+        workingDir: optional(workingDir),
+      })
+      if (!ok) return
+      closeDialog()
+      ui.pushToast(`已保存「${trimmed}」`, { icon: 'pencil' })
       return
     }
 
@@ -124,28 +157,18 @@ function DialogForm({ dialog }: { dialog: DialogState }) {
   }
 
   const { title, submitLabel } = dialogMeta(dialog, data)
+  const editing = dialog.mode === 'edit-app'
 
   return (
     <form onSubmit={submit}>
       <h2 className="dialog-title">{title}</h2>
       <div className="dialog-fields">
-        {dialog.mode === 'add' && (
+        {(dialog.mode === 'add' || editing) && (
           <>
             <label className="field">
-              <span className="field-label">来源路径或网址</span>
-              <textarea
-                ref={firstRef as React.RefObject<HTMLTextAreaElement>}
-                className="field-input"
-                rows={3}
-                placeholder={'C:\\Program Files\\App\\app.exe\nhttps://example.com'}
-                value={source}
-                onChange={(e) => setSource(e.target.value)}
-              />
-              <span className="field-hint">每行一个，可批量导入；网址图标会在后台补齐</span>
-            </label>
-            <label className="field">
-              <span className="field-label">显示名称（可选）</span>
+              <span className="field-label">显示名称</span>
               <input
+                ref={dialog.mode === 'edit-app' ? (firstRef as React.RefObject<HTMLInputElement>) : undefined}
                 className="field-input"
                 type="text"
                 placeholder="留空时自动推导"
@@ -154,35 +177,94 @@ function DialogForm({ dialog }: { dialog: DialogState }) {
               />
             </label>
             <label className="field">
-              <span className="field-label">放入</span>
-              <select className="field-input" value={parent} onChange={(e) => setParent(e.target.value)}>
-                {containers.map((c) => (
-                  <option key={c.id || 'root'} value={c.id}>
-                    {' '.repeat(c.depth)}
-                    {c.label}
-                  </option>
-                ))}
-              </select>
+              <span className="field-label">来源路径或网址</span>
+              {editing ? (
+                <input
+                  className="field-input"
+                  type="text"
+                  placeholder="C:\\Program Files\\App\\app.exe"
+                  value={source}
+                  onChange={(e) => setSource(e.target.value)}
+                />
+              ) : (
+                <textarea
+                  ref={firstRef as React.RefObject<HTMLTextAreaElement>}
+                  className="field-input"
+                  rows={3}
+                  placeholder={'C:\\Program Files\\App\\app.exe\nhttps://example.com'}
+                  value={source}
+                  onChange={(e) => setSource(e.target.value)}
+                />
+              )}
+              {!editing && <span className="field-hint">每行一个，可批量导入；网址图标会在后台补齐</span>}
             </label>
+            <div className="field">
+              <span className="field-label">启动参数（可选）</span>
+              <input
+                className="field-input"
+                type="text"
+                placeholder={'例如：-NoProfile -File "D:\\scripts\\start.ps1"'}
+                value={argumentsText}
+                onChange={(e) => setArgumentsText(e.target.value)}
+              />
+              <label className="field-sub">
+                <span>工作目录</span>
+                <input
+                  className="field-input"
+                  type="text"
+                  placeholder="例如：D:\\Projects"
+                  value={workingDir}
+                  onChange={(e) => setWorkingDir(e.target.value)}
+                />
+              </label>
+              <span className="field-hint">
+                {editing
+                  ? '留空表示不使用启动参数或工作目录；保存后运行只读取当前配置'
+                  : '添加时解析快捷方式作为默认值；保存后运行只读取当前配置'}
+              </span>
+            </div>
+            {!editing && (
+              <label className="field">
+                <span className="field-label">放入</span>
+                <select className="field-input" value={parent} onChange={(e) => setParent(e.target.value)}>
+                  {containers.map((c) => (
+                    <option key={c.id || 'root'} value={c.id}>
+                      {' '.repeat(c.depth)}
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
           </>
         )}
 
-        {(dialog.mode === 'new-category' || dialog.mode === 'new-group' || dialog.mode === 'rename-app') && (
+        {dialog.mode === 'new-category' && (
           <label className="field">
-            <span className="field-label">
-              {dialog.mode === 'new-category' ? '分类名称' : dialog.mode === 'new-group' ? '分组名称' : '显示名称'}
-            </span>
+            <span className="field-label">分类名称</span>
             <input
               ref={firstRef as React.RefObject<HTMLInputElement>}
               className="field-input"
               type="text"
-              placeholder={dialog.mode === 'new-category' ? '例如：开发工具' : dialog.mode === 'new-group' ? '例如：前端' : undefined}
+              placeholder="例如：开发工具"
               value={name}
               onChange={(e) => setName(e.target.value)}
             />
-            {dialog.mode === 'new-group' && (
-              <span className="field-hint">父级：{locateNode(data, dialog.parentId)?.node.name ?? '顶层'}</span>
-            )}
+          </label>
+        )}
+
+        {dialog.mode === 'new-group' && (
+          <label className="field">
+            <span className="field-label">分组名称</span>
+            <input
+              ref={firstRef as React.RefObject<HTMLInputElement>}
+              className="field-input"
+              type="text"
+              placeholder="例如：前端"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+            />
+            <span className="field-hint">父级：{locateNode(data, dialog.parentId)?.node.name ?? '顶层'}</span>
           </label>
         )}
 
@@ -213,25 +295,19 @@ function DeleteHint({ id }: { id: string }) {
   )
 }
 
-function initialName(dialog: DialogState, data: ReturnType<typeof useCatalogStore.getState>['data']): string {
-  if (dialog.mode === 'add') return dialog.name ?? ''
-  if (dialog.mode === 'rename-app') return locateApp(data, dialog.id)?.app.name ?? ''
-  return ''
-}
-
 function dialogMeta(dialog: DialogState, data: ReturnType<typeof useCatalogStore.getState>['data']): {
   title: string
   submitLabel: string
 } {
   switch (dialog.mode) {
     case 'add':
-      return { title: '添加应用', submitLabel: '添加' }
+      return { title: '添加应用', submitLabel: '保存' }
     case 'new-category':
       return { title: '新建分类', submitLabel: '创建' }
     case 'new-group':
       return { title: '新建分组', submitLabel: '创建' }
-    case 'rename-app':
-      return { title: '重命名应用', submitLabel: '保存' }
+    case 'edit-app':
+      return { title: '编辑应用', submitLabel: '保存' }
     case 'delete-node': {
       const kind = locateNode(data, dialog.id)?.kind
       return { title: kind === 'Category' ? '删除分类' : '删除分组', submitLabel: '删除' }

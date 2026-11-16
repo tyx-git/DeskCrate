@@ -78,6 +78,39 @@ fn executor_rejects_empty_and_nul_targets_without_launching_anything() {
 }
 
 #[test]
+fn launch_app_rejects_target_removed_after_saving() {
+    let directory = TestDir::new("system-missing-target");
+    let target = directory.child("gone.exe");
+    fs::write(&target, b"fixture").expect("target fixture should be written");
+    let state = state_with_app(
+        &directory,
+        app_record(&target.to_string_lossy(), IconType::File),
+    );
+    fs::remove_file(&target).expect("target should be removed");
+
+    let error = system::launch_app(&state, "app-1").expect_err("missing target should fail");
+    assert_eq!(error.code, "target_not_found");
+}
+
+#[test]
+fn launch_app_rejects_missing_working_directory() {
+    let directory = TestDir::new("system-missing-workdir");
+    let target = directory.child("app.exe");
+    fs::write(&target, b"fixture").expect("target fixture should be written");
+    let mut app = app_record(&target.to_string_lossy(), IconType::File);
+    app.working_dir = Some(
+        directory
+            .child("missing-work")
+            .to_string_lossy()
+            .into_owned(),
+    );
+    let state = state_with_app(&directory, app);
+
+    let error = system::launch_app(&state, "app-1").expect_err("missing working dir should fail");
+    assert_eq!(error.code, "working_dir_not_found");
+}
+
+#[test]
 fn malformed_shortcut_is_reported_by_the_shortcut_parser_boundary() {
     let directory = TestDir::new("system-shortcut");
     let shortcut = directory.child("broken.lnk");

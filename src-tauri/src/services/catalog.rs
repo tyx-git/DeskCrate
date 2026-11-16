@@ -9,7 +9,7 @@ use crate::{
     models::{
         AddAppRequest, AddAppsRequest, AddAppsResponse, AddCategoryRequest, AddGroupRequest,
         AppData, AppEXE, AppError, BatchAddFailure, Category, DeleteRequest, DropSide, DropTarget,
-        Group, IconType, Item, RenameRequest, RootItem, SetNodeCollapsedRequest,
+        Group, IconType, Item, RenameRequest, RootItem, SetNodeCollapsedRequest, UpdateAppRequest,
     },
     path,
     state::AppState,
@@ -194,6 +194,9 @@ pub fn add_app(state: &AppState, request: AddAppRequest) -> AppResult<AppEXE> {
         validate_id(parent_id)?;
     }
     let source = normalize_source(request.source_path)?;
+    let arguments = normalize_launch_value(request.arguments.as_deref());
+    let working_dir = normalize_launch_value(request.working_dir.as_deref());
+    validate_launch_fields(arguments.as_deref(), working_dir.as_deref())?;
     if let Source::LocalPath(source_path) = &source {
         validate_local_source(source_path)?;
     }
@@ -226,6 +229,8 @@ pub fn add_app(state: &AppState, request: AddAppRequest) -> AppResult<AppEXE> {
         &app_id,
         &icon_service,
         reusable.as_deref(),
+        arguments.as_deref(),
+        working_dir.as_deref(),
     )?;
     let PreparedApp {
         name,
@@ -298,13 +303,21 @@ pub fn add_apps(state: &AppState, request: AddAppsRequest) -> AppResult<AddAppsR
         }
     }
 
+    let arguments = normalize_launch_value(request.arguments.as_deref());
+    let working_dir = normalize_launch_value(request.working_dir.as_deref());
+    validate_launch_fields(arguments.as_deref(), working_dir.as_deref())?;
     let mut added = Vec::new();
     let mut failed = Vec::new();
     let mut cache_paths = Vec::new();
 
     for source_path in request.source_paths {
         let original = source_path.clone();
-        let result = prepare_batch_app(source_path, &icon_service);
+        let result = prepare_batch_app(
+            source_path,
+            &icon_service,
+            arguments.as_deref(),
+            working_dir.as_deref(),
+        );
         match result {
             Ok((app, cache_path)) => {
                 cache_paths.extend(cache_path);
@@ -361,11 +374,15 @@ pub fn add_apps(state: &AppState, request: AddAppsRequest) -> AppResult<AddAppsR
 fn prepare_batch_app(
     source_path: String,
     icon_service: &IconService,
+    arguments: Option<&str>,
+    working_dir: Option<&str>,
 ) -> AppResult<(AppEXE, Option<PathBuf>)> {
     let request = AddAppRequest {
         parent_id: None,
         source_path,
         name: None,
+        arguments: arguments.map(str::to_owned),
+        working_dir: working_dir.map(str::to_owned),
         root_index: None,
     };
     let source = normalize_source(request.source_path)?;
@@ -374,7 +391,15 @@ fn prepare_batch_app(
     }
 
     let app_id = Uuid::new_v4().to_string();
-    let prepared = prepare_app(&source, None, &app_id, icon_service, None)?;
+    let prepared = prepare_app(
+        &source,
+        None,
+        &app_id,
+        icon_service,
+        None,
+        request.arguments.as_deref(),
+        request.working_dir.as_deref(),
+    )?;
     let cache_path = prepared.cache_path.clone();
     let app = AppEXE {
         id: app_id,
@@ -716,19 +741,95 @@ fn apply_category_drop(data: &mut AppData, id: &str, target: DropTarget) -> AppR
     Ok(())
 }
 
-// 按 UUID 重命名应用。
-pub fn rename_app(state: &AppState, request: RenameRequest) -> AppResult<AppEXE> {
+// 更新应用的展示字段与启动配置。
+//
+// 只读取旧来源与图标类型用于判断是否需要重建图标，不克隆整条 `AppEXE`；
+// 图标未变化时保持原 URL，来源变化时按同一应用 ID 覆盖图标文件。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UpdateAppOutcome {
+    pub needs_url_icon: bool,
+}
+
+pub fn update_app(state: &AppState, request: UpdateAppRequest) -> AppResult<UpdateAppOutcome> {
     validate_id(&request.id)?;
     let name = normalize_name(&request.name, "invalid_app_name", "应用")?;
+    let source = normalize_source(request.source_path)?;
+    let arguments = normalize_launch_value(request.arguments.as_deref());
+    let working_dir = normalize_launch_value(request.working_dir.as_deref());
+    validate_launch_fields(arguments.as_deref(), working_dir.as_deref())?;
+    if let Source::LocalPath(source_path) = &source {
+        validate_local_source(source_path)?;
+    }
+
+    let (icon_service, old_source, old_icon_type) = {
+        let store = state.get_lock()?;
+        let data = store.load_data()?;
+        let app = tree::find_app(&data, &request.id)
+            .ok_or_else(|| not_found("app_not_found", "应用", &request.id))?;
+        (
+            IconService::from_store(&store),
+            app.source_path.clone(),
+            app.icon_type.clone(),
+        )
+    };
+
+    let source_changed = !same_source(&old_source, &source, &old_icon_type);
+    let prepared = if source_changed {
+        Some(prepare_app(
+            &source,
+            Some(&name),
+            &request.id,
+            &icon_service,
+            None,
+            arguments.as_deref(),
+            working_dir.as_deref(),
+        )?)
+    } else {
+        None
+    };
+    let needs_url_icon = prepared.as_ref().is_some_and(|prepared| {
+        prepared.icon_type == IconType::Url && prepared.cache_path.is_none()
+    });
+    let source_path = source.into_string();
 
     let store = state.get_lock()?;
+    let icons_dir = store.icons_path().to_path_buf();
     store.mutate_data(|data| {
         let app = tree::find_app_mut(data, &request.id)
             .ok_or_else(|| not_found("app_not_found", "应用", &request.id))?;
-
         app.name = name;
-        Ok(app.clone())
-    })
+        app.source_path = source_path;
+        app.arguments = arguments;
+        app.working_dir = working_dir;
+        if let Some(prepared) = &prepared {
+            app.icon_type = prepared.icon_type.clone();
+            app.icon_url = prepared.icon_url.clone();
+        }
+        Ok(())
+    })?;
+
+    if let Some(prepared) = &prepared {
+        for path in icon_cache_paths(&icons_dir, &request.id) {
+            if prepared.cache_path.as_deref() != Some(path.as_path()) {
+                remove_cached_icon(Some(path.as_path()));
+            }
+        }
+    }
+
+    Ok(UpdateAppOutcome { needs_url_icon })
+}
+
+fn same_source(old_source: &str, source: &Source, old_icon_type: &IconType) -> bool {
+    match source {
+        Source::Url(url) => old_icon_type == &IconType::Url && old_source == url,
+        Source::LocalPath(path) => {
+            let old_path = Path::new(old_source);
+            match (old_path.canonicalize(), path.canonicalize()) {
+                (Ok(old), Ok(new)) => old == new,
+                _ => old_path == path,
+            }
+        }
+    }
 }
 
 // 按 UUID 删除应用。
@@ -795,7 +896,12 @@ fn prepare_app(
     app_id: &str,
     icon_service: &IconService,
     reusable_icon: Option<&str>,
+    arguments_override: Option<&str>,
+    working_dir_override: Option<&str>,
 ) -> AppResult<PreparedApp> {
+    let arguments = normalize_launch_value(arguments_override);
+    let working_dir = normalize_launch_value(working_dir_override);
+
     match source {
         // 网址的图标**不在这里联网抓**。
         //
@@ -817,8 +923,8 @@ fn prepare_app(
                     let icon_url = IconService::asset_url(&result.cache_path);
                     return Ok(PreparedApp {
                         name,
-                        working_dir: None,
-                        arguments: None,
+                        working_dir,
+                        arguments,
                         icon_type: IconType::Url,
                         icon_url,
                         cache_path: Some(result.cache_path),
@@ -829,8 +935,8 @@ fn prepare_app(
 
             Ok(PreparedApp {
                 name,
-                working_dir: None,
-                arguments: None,
+                working_dir,
+                arguments,
                 icon_type: IconType::Url,
                 icon_url: DEFAULT_URL_ICON_URL.to_owned(),
                 cache_path: None,
@@ -844,8 +950,8 @@ fn prepare_app(
 
             Ok(PreparedApp {
                 name,
-                working_dir: shortcut.working_dir,
-                arguments: shortcut.arguments,
+                working_dir: working_dir.or(shortcut.working_dir),
+                arguments: arguments.or(shortcut.arguments),
                 icon_type: IconType::Shortcut,
                 icon_url,
                 cache_path: Some(icon_result.cache_path),
@@ -859,14 +965,42 @@ fn prepare_app(
 
             Ok(PreparedApp {
                 name,
-                working_dir: None,
-                arguments: None,
+                working_dir,
+                arguments,
                 icon_type: classify_source(source_path),
                 icon_url,
                 cache_path: Some(icon_result.cache_path),
             })
         }
     }
+}
+
+fn normalize_launch_value(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn validate_launch_fields(arguments: Option<&str>, working_dir: Option<&str>) -> AppResult<()> {
+    if arguments.is_some_and(|value| value.contains('\0')) {
+        return Err(AppError::new(
+            "invalid_arguments",
+            "启动参数不能包含 NUL 字符",
+        ));
+    }
+
+    if let Some(directory) = working_dir {
+        let path = Path::new(directory);
+        if !path.is_dir() {
+            return Err(AppError::new(
+                "working_dir_not_found",
+                format!("工作目录不存在或不是文件夹: {directory}"),
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 fn normalize_name(

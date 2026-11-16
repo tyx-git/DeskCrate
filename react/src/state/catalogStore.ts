@@ -3,7 +3,7 @@ import { create } from 'zustand'
 
 import { backend, describeError, toAppError } from '../api'
 import { collectCollapseTargets, locateApp, nextAppId } from '../lib/tree'
-import type { AddAppsResponse, AppData, AppEXE, Category, Group } from '../types/catalog'
+import type { AddAppsResponse, AppData, AppEXE, Category, Group, UpdateAppInput } from '../types/catalog'
 import type { DropTarget } from '../types/drop'
 import type { AppError } from '../types/error'
 import { useUiStore } from './uiStore'
@@ -13,6 +13,8 @@ interface DeletedAppSnapshot {
   rootIndex?: number
   sourcePath: string
   name: string
+  argumentsText?: string
+  workingDir?: string
   beforeId: string | null
 }
 
@@ -29,10 +31,23 @@ interface CatalogState {
   addGroup: (parentId: string, name: string) => Promise<Group | null>
   renameGroup: (id: string, name: string) => Promise<boolean>
   deleteGroup: (id: string) => Promise<boolean>
-  addApp: (parentId: string | null, sourcePath: string, name?: string, rootIndex?: number) => Promise<AppEXE | null>
-  addApps: (parentId: string | null, sourcePaths: string[], rootIndex?: number) => Promise<AddAppsResponse>
+  addApp: (
+    parentId: string | null,
+    sourcePath: string,
+    name?: string,
+    argumentsText?: string,
+    workingDir?: string,
+    rootIndex?: number,
+  ) => Promise<AppEXE | null>
+  addApps: (
+    parentId: string | null,
+    sourcePaths: string[],
+    argumentsText?: string,
+    workingDir?: string,
+    rootIndex?: number,
+  ) => Promise<AddAppsResponse>
   dropItem: (id: string, target: DropTarget) => Promise<boolean>
-  renameApp: (id: string, name: string) => Promise<boolean>
+  updateApp: (input: UpdateAppInput) => Promise<boolean>
   deleteApp: (id: string) => Promise<boolean>
   launchApp: (app: AppEXE) => Promise<void>
   toggleCollapse: (id: string, isCollapsed: boolean) => Promise<void>
@@ -105,17 +120,17 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     })
   },
 
-  async addApp(parentId, sourcePath, name, rootIndex) {
+  async addApp(parentId, sourcePath, name, argumentsText, workingDir, rootIndex) {
     return run(set, get, null, async () => {
-      const app = await backend.addApp(parentId, sourcePath, name, rootIndex)
+      const app = await backend.addApp(parentId, sourcePath, name, argumentsText, workingDir, rootIndex)
       await get().load()
       return app
     })
   },
 
-  async addApps(parentId, sourcePaths, rootIndex) {
+  async addApps(parentId, sourcePaths, argumentsText, workingDir, rootIndex) {
     return run(set, get, { added: [], failed: [] }, async () => {
-      const result = await backend.addApps(parentId, sourcePaths, rootIndex)
+      const result = await backend.addApps(parentId, sourcePaths, argumentsText, workingDir, rootIndex)
       await get().load()
       return result
     })
@@ -129,9 +144,9 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
     })
   },
 
-  async renameApp(id, name) {
+  async updateApp(input) {
     return run(set, get, false, async () => {
-      await backend.renameApp(id, name)
+      await backend.updateApp(input)
       await get().load()
       return true
     })
@@ -145,6 +160,8 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
       rootIndex: loc.rootIndex,
       sourcePath: loc.app.sourcePath,
       name: loc.app.name,
+      argumentsText: loc.app.arguments,
+      workingDir: loc.app.workingDir,
       beforeId: nextAppId(loc.list, loc.index),
     }
     const ok = await run(set, get, false, async () => {
@@ -199,7 +216,14 @@ export const useCatalogStore = create<CatalogState>((set, get) => ({
 
 /** 撤销删除：重新添加并尽量回到原位（后端会生成新 ID 并重抓图标）。 */
 async function restoreApp(state: CatalogState, snapshot: DeletedAppSnapshot): Promise<void> {
-  const app = await state.addApp(snapshot.parentId, snapshot.sourcePath, snapshot.name, snapshot.rootIndex)
+  const app = await state.addApp(
+    snapshot.parentId,
+    snapshot.sourcePath,
+    snapshot.name,
+    snapshot.argumentsText,
+    snapshot.workingDir,
+    snapshot.rootIndex,
+  )
   if (!app) return
   if (snapshot.beforeId) {
     await state.dropItem(app.id, { type: 'item', id: snapshot.beforeId, side: 'before' })

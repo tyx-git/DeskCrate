@@ -17,6 +17,15 @@ export interface AppEXE {
   createdTime: string
 }
 
+/** 编辑应用时提交的完整可编辑字段。 */
+export interface UpdateAppInput {
+  id: string
+  name: string
+  sourcePath: string
+  arguments?: string
+  workingDir?: string
+}
+
 /** 子分组，可继续嵌套分组或应用。 */
 export interface Group {
   id: string

@@ -89,6 +89,8 @@ fn evaluate_local_icon_extraction_time() {
             parent_id: None,
             source_path: source.to_string_lossy().into_owned(),
             name: Some("本地图标评估".to_owned()),
+            arguments: None,
+            working_dir: None,
             root_index: None,
         },
     )
@@ -141,6 +143,8 @@ fn evaluate_url_add_app_time() {
             parent_id: None,
             source_path: url.clone(),
             name: Some("网址添加评估".to_owned()),
+            arguments: None,
+            working_dir: None,
             root_index: None,
         },
     )
@@ -176,6 +180,8 @@ fn evaluate_batch_add_apps_time() {
                 .iter()
                 .map(|path| path.to_string_lossy().into_owned())
                 .collect(),
+            arguments: None,
+            working_dir: None,
             root_index: None,
         },
     )

@@ -7,7 +7,7 @@ export type DialogState =
   | { mode: 'add'; source?: string; name?: string; parentId?: string; rootIndex?: number }
   | { mode: 'new-category' }
   | { mode: 'new-group'; parentId: string }
-  | { mode: 'rename-app'; id: string }
+  | { mode: 'edit-app'; id: string }
   | { mode: 'delete-node'; id: string }
 
 export type CtxTargetType = 'app' | 'Category' | 'Group' | 'blank'

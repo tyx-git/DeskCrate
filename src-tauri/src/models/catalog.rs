@@ -108,8 +108,8 @@ pub struct AddGroupRequest {
 
 // 新增应用或快捷方式时由前端提交的请求数据。
 //
-// `source_path` 是用户拖入或选择的原始路径。快捷方式的目标路径、
-// 启动参数、工作目录和图标由 service 层解析生成，前端不直接提交。
+// `source_path` 是用户拖入或选择的原始路径。图标由 service 层解析生成；
+// `arguments` 与 `working_dir` 可由前端显式填写，缺省时快捷方式沿用解析值。
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AddAppRequest {
@@ -122,6 +122,10 @@ pub struct AddAppRequest {
     pub source_path: String, // 原始路径或网址；快捷方式必须保留 .lnk 来源。
     #[serde(default)]
     pub name: Option<String>, // 可选的自定义展示名称；省略时由后端推导。
+    #[serde(default)]
+    pub arguments: Option<String>, // 可选启动参数；空白视为 None。
+    #[serde(default)]
+    pub working_dir: Option<String>, // 可选工作目录；空白视为 None。
 
     // 放到顶层时插到第几个根节点**之前**（0 起；等于根节点数量表示放到最下方）。
     //
@@ -140,6 +144,25 @@ pub struct AddAppsRequest {
     pub source_paths: Vec<String>, // 要导入的来源路径或网址。
     #[serde(default)]
     pub root_index: Option<usize>, // 顶层落点；放入容器时忽略。
+    #[serde(default)]
+    pub arguments: Option<String>, // 批量导入统一的启动参数；空白视为 None。
+    #[serde(default)]
+    pub working_dir: Option<String>, // 批量导入统一的工作目录；空白视为 None。
+}
+
+// 编辑应用时提交的完整可编辑字段。
+//
+// 来源路径变化时 service 会重新解析快捷方式并重建图标；未变化时复用旧图标。
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAppRequest {
+    pub id: String,
+    pub name: String,
+    pub source_path: String,
+    #[serde(default)]
+    pub arguments: Option<String>,
+    #[serde(default)]
+    pub working_dir: Option<String>,
 }
 
 // 批量导入中的单项失败信息。单项失败不影响其他来源继续导入。

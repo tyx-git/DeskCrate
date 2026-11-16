@@ -1,1 +1,0 @@
-{"pending":[{"text":"检查还有那些文件编码用的是CRLF，全部改为UTF-8","kind":"correction","patterns":["swap"],"at":"2026-11-14T15:19:17.962Z"}],"seen":["01bf1846-9f4f-4bd8-a49a-d13a03f929b3"]}

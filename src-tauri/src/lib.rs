@@ -132,7 +132,7 @@ pub fn run() {
             commands::catalog::add_app,
             commands::catalog::add_apps,
             commands::catalog::drop_item,
-            commands::catalog::rename_app,
+            commands::catalog::update_app,
             commands::catalog::delete_app,
             commands::settings::get_settings,
             commands::settings::update_auto_collapse,

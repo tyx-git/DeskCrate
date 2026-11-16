@@ -12,8 +12,8 @@ use lib::{
     commands,
     error::AppResult,
     models::{
-        AddAppRequest, AddAppsRequest, AddAppsResponse, AppEXE, Settings, WindowPosition,
-        WindowSize,
+        AddAppRequest, AddAppsRequest, AddAppsResponse, AppEXE, Settings, UpdateAppRequest,
+        WindowPosition, WindowSize,
     },
     services,
     state::AppState,
@@ -38,6 +38,8 @@ fn add_app(
     parent_id: Option<String>,
     source_path: String,
     name: Option<String>,
+    arguments: Option<String>,
+    working_dir: Option<String>,
     root_index: Option<usize>,
     state: tauri::State<'_, AppState>,
 ) -> AppResult<AppEXE> {
@@ -47,6 +49,8 @@ fn add_app(
             parent_id,
             source_path,
             name,
+            arguments,
+            working_dir,
             root_index,
         },
     )
@@ -58,6 +62,8 @@ fn add_app(
 fn add_apps(
     parent_id: Option<String>,
     source_paths: Vec<String>,
+    arguments: Option<String>,
+    working_dir: Option<String>,
     root_index: Option<usize>,
     state: tauri::State<'_, AppState>,
 ) -> AppResult<AddAppsResponse> {
@@ -66,9 +72,34 @@ fn add_apps(
         AddAppsRequest {
             parent_id,
             source_paths,
+            arguments,
+            working_dir,
             root_index,
         },
     )
+}
+
+// `update_app` 在 MockRuntime 下同样去掉 AppHandle；只验证 IPC 形状与落库。
+#[tauri::command]
+fn update_app(
+    id: String,
+    name: String,
+    source_path: String,
+    arguments: Option<String>,
+    working_dir: Option<String>,
+    state: tauri::State<'_, AppState>,
+) -> AppResult<()> {
+    services::catalog::update_app(
+        state.inner(),
+        UpdateAppRequest {
+            id,
+            name,
+            source_path,
+            arguments,
+            working_dir,
+        },
+    )?;
+    Ok(())
 }
 
 fn request(command: &str, body: Value) -> InvokeRequest {
@@ -101,8 +132,8 @@ fn create_test_app(directory: &TestDir) -> tauri::App<tauri::test::MockRuntime> 
             commands::catalog::set_node_collapsed,
             add_app,
             add_apps,
+            update_app,
             commands::catalog::drop_item,
-            commands::catalog::rename_app,
             commands::catalog::delete_app,
             commands::settings::get_settings,
             commands::settings::update_auto_collapse,
@@ -116,6 +147,19 @@ fn create_test_app(directory: &TestDir) -> tauri::App<tauri::test::MockRuntime> 
         ])
         .build(mock_context(noop_assets()))
         .expect("mock Tauri app should build")
+}
+
+fn find_app<'a>(value: &'a Value, app_id: &str) -> Option<&'a Value> {
+    match value {
+        Value::Object(map) => {
+            if map.get("id").and_then(Value::as_str) == Some(app_id) {
+                return Some(value);
+            }
+            map.values().find_map(|child| find_app(child, app_id))
+        }
+        Value::Array(items) => items.iter().find_map(|child| find_app(child, app_id)),
+        _ => None,
+    }
 }
 
 fn invoke(
@@ -209,12 +253,25 @@ fn catalog_and_settings_commands_use_the_documented_ipc_shape() {
     assert_eq!(app_node["iconType"], "Url");
     assert_eq!(app_node["sourcePath"], "https://www.rust-lang.org");
 
-    let renamed_app = invoke(
+    invoke(
         &window,
-        "rename_app",
-        json!({"id": app_id, "name": "Rust 官网"}),
+        "update_app",
+        json!({
+            "id": app_id,
+            "name": "Rust 官网",
+            "sourcePath": "https://www.rust-lang.org",
+            "arguments": "--example",
+            "workingDir": std::env::temp_dir().to_string_lossy()
+        }),
     );
-    assert_eq!(renamed_app["name"], "Rust 官网");
+    let updated_data = invoke(&window, "get_all_data", json!({}));
+    let updated_app = find_app(&updated_data, &app_id).expect("updated app should still exist");
+    assert_eq!(updated_app["name"], "Rust 官网");
+    assert_eq!(updated_app["arguments"], "--example");
+    assert_eq!(
+        updated_app["workingDir"],
+        std::env::temp_dir().to_string_lossy().as_ref()
+    );
     invoke(&window, "delete_app", json!({"id": app_id}));
     invoke(
         &window,

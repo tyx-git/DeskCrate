@@ -22,7 +22,7 @@ export const COMMANDS = {
   addApp: 'add_app',
   addApps: 'add_apps',
   dropItem: 'drop_item',
-  renameApp: 'rename_app',
+  updateApp: 'update_app',
   deleteApp: 'delete_app',
   launchIcon: 'launch_icon',
 } as const

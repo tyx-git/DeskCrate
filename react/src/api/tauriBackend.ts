@@ -2,7 +2,14 @@
 // 平台 API（窗口显示/聚焦/原生拖放）也只在这里 import，src 其他位置不直接碰 @tauri-apps。
 import { invoke } from '@tauri-apps/api/core'
 
-import type { AddAppsResponse, AppData, AppEXE, Category, Group } from '../types/catalog'
+import type {
+  AddAppsResponse,
+  AppData,
+  AppEXE,
+  Category,
+  Group,
+  UpdateAppInput,
+} from '../types/catalog'
 import type { DropTarget } from '../types/drop'
 import type { Settings, Theme, ViewMode, WindowInitResponse } from '../types/settings'
 import type { Backend, UrlIconProbe } from './backend'
@@ -41,12 +48,45 @@ export const tauriBackend: Backend = {
   deleteGroup: (id: string) => invoke<void>(COMMANDS.deleteGroup, { id }),
   setNodeCollapsed: (id: string, isCollapsed: boolean) =>
     invoke<void>(COMMANDS.setNodeCollapsed, { id, isCollapsed }),
-  addApp: (parentId: string | null, sourcePath: string, name?: string, rootIndex?: number) =>
-    invoke<AppEXE>(COMMANDS.addApp, { parentId, sourcePath, name, rootIndex }),
-  addApps: (parentId: string | null, sourcePaths: string[], rootIndex?: number) =>
-    invoke<AddAppsResponse>(COMMANDS.addApps, { parentId, sourcePaths, rootIndex }),
+  addApp: (
+    parentId: string | null,
+    sourcePath: string,
+    name?: string,
+    argumentsText?: string,
+    workingDir?: string,
+    rootIndex?: number,
+  ) =>
+    invoke<AppEXE>(COMMANDS.addApp, {
+      parentId,
+      sourcePath,
+      name,
+      arguments: argumentsText,
+      workingDir,
+      rootIndex,
+    }),
+  addApps: (
+    parentId: string | null,
+    sourcePaths: string[],
+    argumentsText?: string,
+    workingDir?: string,
+    rootIndex?: number,
+  ) =>
+    invoke<AddAppsResponse>(COMMANDS.addApps, {
+      parentId,
+      sourcePaths,
+      arguments: argumentsText,
+      workingDir,
+      rootIndex,
+    }),
   dropItem: (id: string, target: DropTarget) => invoke<void>(COMMANDS.dropItem, { id, target }),
-  renameApp: (id: string, name: string) => invoke<AppEXE>(COMMANDS.renameApp, { id, name }),
+  updateApp: (input: UpdateAppInput) =>
+    invoke<void>(COMMANDS.updateApp, {
+      id: input.id,
+      name: input.name,
+      sourcePath: input.sourcePath,
+      arguments: input.arguments,
+      workingDir: input.workingDir,
+    }),
   deleteApp: (id: string) => invoke<void>(COMMANDS.deleteApp, { id }),
   launchIcon: (id: string) => invoke<void>(COMMANDS.launchIcon, { id }),
 

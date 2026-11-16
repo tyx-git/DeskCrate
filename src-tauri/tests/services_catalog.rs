@@ -6,6 +6,7 @@ use lib::{
     models::{
         AddAppRequest, AddCategoryRequest, AddGroupRequest, AppData, AppEXE, Category,
         DeleteRequest, DropSide, DropTarget, IconType, Item, RenameRequest, RootItem,
+        UpdateAppRequest,
     },
     services::catalog,
     state::AppState,
@@ -191,6 +192,8 @@ fn app_crud_supports_urls_and_uses_id_lookup() {
             parent_id: Some(category.id.clone()),
             source_path: "  https://www.rust-lang.org/learn  ".to_owned(),
             name: None,
+            arguments: None,
+            working_dir: None,
             root_index: None,
         },
     )
@@ -210,15 +213,25 @@ fn app_crud_supports_urls_and_uses_id_lookup() {
     assert!(app.arguments.is_none());
     assert!(app.working_dir.is_none());
 
-    let renamed = catalog::rename_app(
+    catalog::update_app(
         &state,
-        RenameRequest {
+        UpdateAppRequest {
             id: app.id.clone(),
             name: "Rust 官网".to_owned(),
+            source_path: "https://www.rust-lang.org/learn".to_owned(),
+            arguments: Some("--offline".to_owned()),
+            working_dir: Some(std::env::temp_dir().to_string_lossy().into_owned()),
         },
     )
     .unwrap();
-    assert_eq!(renamed.name, "Rust 官网");
+    let data = catalog::get_all_data(&state).unwrap();
+    let updated = find_app(&data, &app.id).expect("updated app should exist");
+    assert_eq!(updated.name, "Rust 官网");
+    assert_eq!(updated.arguments.as_deref(), Some("--offline"));
+    assert_eq!(
+        updated.working_dir.as_deref(),
+        Some(std::env::temp_dir().to_string_lossy().as_ref())
+    );
     catalog::delete_app(&state, DeleteRequest { id: app.id.clone() }).unwrap();
 
     let data = catalog::get_all_data(&state).unwrap();
@@ -259,6 +272,8 @@ fn app_crud_classifies_regular_files_and_executables() {
             parent_id: Some(category.id.clone()),
             source_path: regular_file.to_string_lossy().into_owned(),
             name: None,
+            arguments: None,
+            working_dir: None,
             root_index: None,
         },
     )
@@ -274,6 +289,8 @@ fn app_crud_classifies_regular_files_and_executables() {
             parent_id: Some(category.id),
             source_path: executable.to_string_lossy().into_owned(),
             name: None,
+            arguments: None,
+            working_dir: None,
             root_index: None,
         },
     )
@@ -304,6 +321,8 @@ fn local_folder_app_extracts_an_icon_and_delete_cleans_the_cache() {
             parent_id: Some(category.id),
             source_path: source_dir.to_string_lossy().into_owned(),
             name: Some("我的文件夹".to_owned()),
+            arguments: None,
+            working_dir: None,
             root_index: None,
         },
     )
@@ -349,6 +368,8 @@ fn deleting_a_category_removes_descendants_and_their_icon_cache() {
             parent_id: Some(group.id),
             source_path: source_dir.to_string_lossy().into_owned(),
             name: None,
+            arguments: None,
+            working_dir: None,
             root_index: None,
         },
     )
@@ -380,6 +401,8 @@ fn orphan_icon_sweep_removes_only_unreferenced_uuid_files() {
             parent_id: Some(category.id),
             source_path: source_dir.to_string_lossy().into_owned(),
             name: None,
+            arguments: None,
+            working_dir: None,
             root_index: None,
         },
     )
@@ -431,6 +454,8 @@ fn invalid_app_source_and_wrong_node_kinds_are_rejected() {
             parent_id: Some(category.id.clone()),
             source_path: " \0 ".to_owned(),
             name: None,
+            arguments: None,
+            working_dir: None,
             root_index: None,
         },
     )
@@ -485,6 +510,8 @@ fn missing_local_app_source_is_rejected_even_when_a_fallback_icon_exists() {
                 .to_string_lossy()
                 .into_owned(),
             name: None,
+            arguments: None,
+            working_dir: None,
             root_index: None,
         },
     )
@@ -530,6 +557,8 @@ fn top_level_apps_can_be_inserted_at_any_position_between_categories() {
                 parent_id: None,
                 source_path: format!("https://example.com/{name}"),
                 name: Some(name.to_owned()),
+                arguments: None,
+                working_dir: None,
                 root_index: Some(index),
             },
         )
@@ -592,6 +621,8 @@ fn a_top_level_row_holds_several_apps_and_empties_itself_when_drained() {
                 source_path: format!("https://example.com/{name}"),
                 name: Some(name.to_owned()),
                 // 都插到分类之前：连续的顶层应用应当并进同一行。
+                arguments: None,
+                working_dir: None,
                 root_index: Some(0),
             },
         )
@@ -645,6 +676,8 @@ fn an_app_can_be_moved_between_the_root_and_a_category() {
                 parent_id: None,
                 source_path: format!("https://example.com/{name}"),
                 name: Some(name.to_owned()),
+                arguments: None,
+                working_dir: None,
                 root_index: None,
             },
         )
@@ -714,6 +747,8 @@ fn reordering_inside_one_container_compensates_for_the_removal_shift() {
                     parent_id: Some(category.id.clone()),
                     source_path: format!("https://example.com/{name}"),
                     name: Some(name.to_owned()),
+                    arguments: None,
+                    working_dir: None,
                     root_index: None,
                 },
             )
@@ -803,6 +838,8 @@ fn an_app_can_be_reordered_within_one_top_level_row() {
                     source_path: format!("https://example.com/{name}"),
                     name: Some(name.to_owned()),
                     // 都插到第 0 行，并成一行。
+                    arguments: None,
+                    working_dir: None,
                     root_index: Some(0),
                 },
             )
@@ -858,6 +895,8 @@ fn groups_can_be_reordered_among_mixed_siblings_without_losing_their_subtree() {
             parent_id: Some(category.id.clone()),
             source_path: "https://example.com/app".into(),
             name: Some("中间应用".into()),
+            arguments: None,
+            working_dir: None,
             root_index: None,
         },
     )
@@ -1037,6 +1076,8 @@ fn adding_a_url_app_does_not_wait_for_the_icon() {
             parent_id: None,
             source_path: "https://icon.invalid.example".to_owned(),
             name: Some("慢站点".to_owned()),
+            arguments: None,
+            working_dir: None,
             root_index: None,
         },
     )
@@ -1063,6 +1104,8 @@ fn refresh_url_icon_only_touches_url_apps_still_using_the_placeholder() {
             parent_id: None,
             source_path: directory.path().to_string_lossy().into_owned(),
             name: Some("本地".to_owned()),
+            arguments: None,
+            working_dir: None,
             root_index: None,
         },
     )
@@ -1096,6 +1139,8 @@ fn url_app_without_a_reachable_site_falls_back_to_the_builtin_icon() {
             // 不存在的域名那样把测试套件拖慢几秒。
             source_path: "http://127.0.0.1:1/".to_owned(),
             name: None,
+            arguments: None,
+            working_dir: None,
             root_index: None,
         },
     )
@@ -1150,6 +1195,8 @@ fn adds_with_real_icon(state: &AppState, url: &str) -> bool {
             parent_id: None,
             source_path: url.to_owned(),
             name: None,
+            arguments: None,
+            working_dir: None,
             root_index: None,
         },
     )
@@ -1169,6 +1216,8 @@ fn a_url_app_reuses_the_icon_already_fetched_for_the_same_origin() {
             parent_id: None,
             source_path: "https://reuse.example/docs/a".to_owned(),
             name: Some("第一个".to_owned()),
+            arguments: None,
+            working_dir: None,
             root_index: None,
         },
     )
@@ -1181,6 +1230,8 @@ fn a_url_app_reuses_the_icon_already_fetched_for_the_same_origin() {
             parent_id: None,
             source_path: "https://reuse.example/docs/b".to_owned(),
             name: Some("第二个".to_owned()),
+            arguments: None,
+            working_dir: None,
             root_index: None,
         },
     )
@@ -1215,6 +1266,8 @@ fn icons_are_only_reused_within_the_same_origin() {
             parent_id: None,
             source_path: "https://origin.example/docs".to_owned(),
             name: Some("源站点".to_owned()),
+            arguments: None,
+            working_dir: None,
             root_index: None,
         },
     )
@@ -1254,6 +1307,8 @@ fn an_app_still_holding_the_builtin_icon_is_not_a_reuse_source() {
             parent_id: None,
             source_path: "http://127.0.0.1:1/a".to_owned(),
             name: Some("没图标的".to_owned()),
+            arguments: None,
+            working_dir: None,
             root_index: None,
         },
     )
@@ -1279,6 +1334,8 @@ fn root_level_apps_can_be_added_renamed_and_deleted() {
             parent_id: None,
             source_path: source_dir.to_string_lossy().into_owned(),
             name: Some("顶层应用".to_owned()),
+            arguments: None,
+            working_dir: None,
             root_index: None,
         },
     )
@@ -1296,15 +1353,24 @@ fn root_level_apps_can_be_added_renamed_and_deleted() {
     );
 
     // 顶层应用必须能被后续所有按 ID 的操作找到：重命名、启动、删除。
-    let renamed = catalog::rename_app(
+    catalog::update_app(
         &state,
-        RenameRequest {
+        UpdateAppRequest {
             id: app.id.clone(),
             name: "改名后的顶层应用".to_owned(),
+            source_path: app.source_path.clone(),
+            arguments: None,
+            working_dir: None,
         },
     )
-    .expect("root level app should be renamed");
-    assert_eq!(renamed.name, "改名后的顶层应用");
+    .expect("root level app should be edited");
+    let data = catalog::get_all_data(&state).unwrap();
+    assert_eq!(
+        find_app(&data, &app.id)
+            .expect("edited app should exist")
+            .name,
+        "改名后的顶层应用"
+    );
 
     let icon_path = directory.child(&format!("icons/{}.png", app.id));
     assert!(icon_path.is_file(), "顶层应用的图标同样要缓存");
@@ -1328,6 +1394,8 @@ fn root_level_app_icons_are_not_treated_as_orphans() {
             parent_id: None,
             source_path: source_dir.to_string_lossy().into_owned(),
             name: None,
+            arguments: None,
+            working_dir: None,
             root_index: None,
         },
     )
@@ -1354,6 +1422,120 @@ fn legacy_data_without_the_root_apps_field_still_loads() {
     let data = store.load_data().expect("legacy data should load");
     assert!(data.apps.is_empty());
     assert!(data.items.is_empty());
+}
+
+#[test]
+fn update_app_persists_and_clears_launch_fields_without_rebuilding_icon() {
+    let directory = TestDir::new("app-launch-fields");
+    let work = directory.child("work");
+    fs::create_dir_all(&work).expect("work dir should be created");
+    let state = directory.state();
+    let source = work.to_string_lossy().into_owned();
+
+    let app = catalog::add_app(
+        &state,
+        AddAppRequest {
+            parent_id: None,
+            source_path: source.clone(),
+            name: Some("字段应用".to_owned()),
+            arguments: Some("  --flag  ".to_owned()),
+            working_dir: Some(source.clone()),
+            root_index: None,
+        },
+    )
+    .expect("app with launch fields should be added");
+
+    let data = catalog::get_all_data(&state).unwrap();
+    let stored = find_app(&data, &app.id).expect("app should exist");
+    assert_eq!(stored.arguments.as_deref(), Some("--flag"));
+    assert_eq!(stored.working_dir.as_deref(), Some(source.as_str()));
+    let icon = directory.child(&format!("icons/{}.png", app.id));
+    assert!(icon.is_file(), "icon should be cached under the app id");
+
+    let outcome = catalog::update_app(
+        &state,
+        UpdateAppRequest {
+            id: app.id.clone(),
+            name: "字段应用已编辑".to_owned(),
+            source_path: source.clone(),
+            arguments: None,
+            working_dir: None,
+        },
+    )
+    .expect("app without launch fields should update");
+    assert!(!outcome.needs_url_icon, "same source should reuse the icon");
+
+    let data = catalog::get_all_data(&state).unwrap();
+    let stored = find_app(&data, &app.id).expect("app should still exist");
+    assert_eq!(stored.name, "字段应用已编辑");
+    assert!(stored.arguments.is_none());
+    assert!(stored.working_dir.is_none());
+    let json = serde_json::to_value(stored).expect("app should serialize");
+    assert!(
+        json.get("arguments").is_none(),
+        "empty arguments must be omitted"
+    );
+    assert!(
+        json.get("workingDir").is_none(),
+        "empty working dir must be omitted"
+    );
+    assert!(icon.is_file(), "unchanged source must keep the cached icon");
+}
+
+#[test]
+fn update_app_rejects_missing_working_directory_and_source() {
+    let directory = TestDir::new("app-launch-validation");
+    let work = directory.child("work");
+    fs::create_dir_all(&work).expect("work dir should be created");
+    let state = directory.state();
+    let source = work.to_string_lossy().into_owned();
+
+    let app = catalog::add_app(
+        &state,
+        AddAppRequest {
+            parent_id: None,
+            source_path: source.clone(),
+            name: Some("待校验".to_owned()),
+            arguments: None,
+            working_dir: None,
+            root_index: None,
+        },
+    )
+    .expect("app should be added");
+
+    let missing_dir = directory
+        .child("missing-work")
+        .to_string_lossy()
+        .into_owned();
+    let error = catalog::update_app(
+        &state,
+        UpdateAppRequest {
+            id: app.id.clone(),
+            name: app.name.clone(),
+            source_path: source.clone(),
+            arguments: None,
+            working_dir: Some(missing_dir),
+        },
+    )
+    .expect_err("missing working directory should fail");
+    assert_eq!(error.code, "working_dir_not_found");
+
+    let missing_source = directory
+        .child("missing.exe")
+        .to_string_lossy()
+        .into_owned();
+    let error = catalog::update_app(
+        &state,
+        UpdateAppRequest {
+            id: app.id,
+            name: app.name,
+            source_path: missing_source,
+            arguments: None,
+            working_dir: None,
+        },
+    )
+    .expect_err("missing source should fail");
+    assert_eq!(error.code, "source_not_found");
 }
 
 #[test]

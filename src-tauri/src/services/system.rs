@@ -65,17 +65,16 @@ fn build_launch_spec(app: &AppEXE) -> AppResult<LaunchSpec> {
     let is_shortcut =
         matches!(&app.icon_type, &IconType::Shortcut) || path::is_shortcut(source_path);
 
-    if is_shortcut {
-        let shortcut = shortcut::parse_shortcut(source_path)?;
-        return Ok(LaunchSpec {
-            target_path: PathBuf::from(shortcut.target_path),
-            working_dir: optional_path(shortcut.working_dir.as_deref()),
-            arguments: text::optional_trimmed(shortcut.arguments.as_deref()).map(str::to_owned),
-        });
-    }
+    let target_path = if is_shortcut {
+        PathBuf::from(shortcut::parse_shortcut(source_path)?.target_path)
+    } else {
+        source_path.to_path_buf()
+    };
 
+    // 运行时严格使用 data.json 中的字段；快捷方式解析只负责目标路径，
+    // 不再覆盖用户保存的启动参数或工作目录。
     Ok(LaunchSpec {
-        target_path: source_path.to_path_buf(),
+        target_path,
         working_dir: optional_path(app.working_dir.as_deref()),
         arguments: text::optional_trimmed(app.arguments.as_deref()).map(str::to_owned),
     })
