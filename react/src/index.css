@@ -106,8 +106,8 @@ svg { display: block; }
 }
 .panel.is-collapsed:hover { background: rgba(255, 255, 255, 0.98); box-shadow: 0 0 0 1px rgba(44, 110, 95, 0.35), 0 2px 14px rgba(28, 33, 31, 0.22); }
 .panel.is-resizing { transition: none; }
-.panel-body { height: 100%; display: flex; flex-direction: column; opacity: 1; transition: opacity 0.13s var(--ease); }
-.panel.is-collapsed .panel-body { opacity: 0; pointer-events: none; }
+.panel-body { height: 100%; display: flex; flex-direction: column; opacity: 1; transition: opacity 0.13s var(--ease) var(--morph-ms); }
+.panel.is-collapsed .panel-body { opacity: 0; pointer-events: none; transition: none; }
 
 /* 头部 */
 .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px var(--pad-x) 7px; }
@@ -327,5 +327,5 @@ select.field-input { cursor: default; appearance: none; background-image: linear
 
 /* ---- 动效偏好 ---- */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
+  *, *::before, *::after { transition-duration: 0.01ms !important; transition-delay: 0ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
 }
