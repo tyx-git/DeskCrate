@@ -72,11 +72,11 @@ impl IconService {
         arguments: Option<&str>,
         app_id: &str,
     ) -> AppResult<IconExtractionResult> {
-        // 系统应用（UWP/Store 应用）的图标不在 explorer.exe 的资源里，
-        // 必须用 `shell:AppsFolder\<AUMID>` 交给 Shell 解析。
+        // 系统应用（UWP/Store 应用、回收站、控制面板等）的图标不在
+        // explorer.exe 的资源里，必须交给 Shell 命名空间解析。
         // 这里只做严格的开头匹配：启动参数中间出现的 shell 字样不算，
         // 大小写也必须完全一致。
-        if let Some(target) = arguments.filter(|value| value.starts_with("shell:AppsFolder\\")) {
+        if let Some(target) = arguments.filter(|value| value.starts_with("shell:")) {
             match self.extractor.extract_file(Path::new(target), 0, app_id) {
                 Ok(result) => return Ok(result),
                 Err(error) => {

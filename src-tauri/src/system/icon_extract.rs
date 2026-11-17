@@ -266,13 +266,10 @@ fn extract_icon_from_file(source_path: &Path, icon_index: i32) -> AppResult<Owne
     let wide_path =
         wide::nul_terminated(source_path.as_os_str(), "icon_invalid_path", "图标来源路径")?;
 
-    // UWP/Store 应用的图标不在 explorer.exe 的资源表里。只有参数严格
-    // 以 `shell:AppsFolder\` 开头时才走 Shell PIDL；CLSID 转换失败会
-    // 回退到来源文件自身的图标，不能拖垮添加/编辑。
-    if source_path
-        .to_string_lossy()
-        .starts_with("shell:AppsFolder\\")
-    {
+    // UWP/Store 应用、回收站、控制面板等 Shell 命名空间的图标不在
+    // explorer.exe 的资源表里。只有路径严格以 `shell:` 开头时才走
+    // Shell PIDL；解析失败会回退到来源文件自身的图标，不能拖垮添加/编辑。
+    if source_path.to_string_lossy().starts_with("shell:") {
         let _com = ComApartment::initialize()?;
         let mut pidl: *mut ITEMIDLIST = ptr::null_mut();
         unsafe {
@@ -815,6 +812,14 @@ mod tests {
             0,
         )
         .expect("系统应用图标应能通过 PIDL 提取");
+
+        assert!(!icon.handle.is_invalid());
+    }
+
+    #[test]
+    fn extracts_recycle_bin_icon_from_shell_namespace() {
+        let icon = extract_icon_from_file(Path::new("shell:RecycleBinFolder"), 0)
+            .expect("回收站图标应能通过 PIDL 提取");
 
         assert!(!icon.handle.is_invalid());
     }

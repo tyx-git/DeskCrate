@@ -775,13 +775,13 @@ pub fn update_app(state: &AppState, request: UpdateAppRequest) -> AppResult<Upda
     };
 
     let source_changed = !same_source(&old_source, &source, &old_icon_type);
-    let old_shell = old_arguments
-        .as_deref()
-        .is_some_and(|value| value.starts_with("shell:AppsFolder\\"));
-    let new_shell = arguments
-        .as_deref()
-        .is_some_and(|value| value.starts_with("shell:AppsFolder\\"));
-    let shell_changed = (old_shell || new_shell) && old_arguments != arguments;
+    let shell_changed = old_arguments != arguments
+        && (old_arguments
+            .as_deref()
+            .is_some_and(|value| value.starts_with("shell:"))
+            || arguments
+                .as_deref()
+                .is_some_and(|value| value.starts_with("shell:")));
     let prepared = if source_changed || shell_changed {
         Some(prepare_app(
             &source,
