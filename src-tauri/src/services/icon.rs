@@ -1,4 +1,9 @@
+use std::ffi::OsString;
+use std::os::windows::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
+
+use windows::core::PCWSTR;
+use windows::Win32::System::Environment::ExpandEnvironmentStringsW;
 
 use crate::{
     error::AppResult,
@@ -206,7 +211,37 @@ fn shortcut_icon_source(shortcut: &ParsedShortcut) -> AppResult<(PathBuf, i32)> 
 }
 
 // 将快捷方式中的相对图标路径解析为相对于 `.lnk` 所在目录的路径。
+//
+// `IconLocation` 常见 `%windir%\...` 这种 Windows 占位符，不能直接当相对路径；
+// 先按系统规则展开，再判断绝对/相对。
 fn resolve_shortcut_relative_path(shortcut_path: &str, icon_path: PathBuf) -> PathBuf {
+    let expanded = {
+        let wide: Vec<u16> = icon_path
+            .as_os_str()
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+        let needed = unsafe { ExpandEnvironmentStringsW(PCWSTR(wide.as_ptr()), None) };
+
+        if needed == 0 {
+            None
+        } else {
+            let mut buffer = vec![0u16; needed as usize];
+            let written =
+                unsafe { ExpandEnvironmentStringsW(PCWSTR(wide.as_ptr()), Some(&mut buffer)) };
+
+            // 返回值包含结尾 NUL；失败或越界时保留原路径。
+            if written == 0 || written > needed {
+                None
+            } else {
+                Some(PathBuf::from(OsString::from_wide(
+                    &buffer[..written as usize - 1],
+                )))
+            }
+        }
+    };
+
+    let icon_path = expanded.unwrap_or(icon_path);
     if icon_path.is_absolute() {
         return icon_path;
     }
@@ -215,4 +250,48 @@ fn resolve_shortcut_relative_path(shortcut_path: &str, icon_path: PathBuf) -> Pa
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .join(icon_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_shortcut_relative_path;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn expands_windows_environment_variables_in_icon_location() {
+        let windir = std::env::var("windir").expect("windir 环境变量应存在");
+        let resolved = resolve_shortcut_relative_path(
+            r"C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Administrative Tools\Task Scheduler.lnk",
+            PathBuf::from(r"%windir%\system32\miguiresource.dll"),
+        );
+
+        assert!(resolved.is_absolute());
+        assert_eq!(
+            resolved,
+            Path::new(&windir)
+                .join("system32")
+                .join("miguiresource.dll")
+        );
+    }
+
+    #[test]
+    fn keeps_relative_icon_paths_relative_to_shortcut() {
+        let resolved =
+            resolve_shortcut_relative_path(r"C:\Links\app.lnk", PathBuf::from(r"icons\app.ico"));
+
+        assert_eq!(resolved, PathBuf::from(r"C:\Links\icons\app.ico"));
+    }
+
+    #[test]
+    fn keeps_unknown_placeholders_under_shortcut_directory() {
+        let resolved = resolve_shortcut_relative_path(
+            r"C:\Links\app.lnk",
+            PathBuf::from(r"%DESKCRATE_UNKNOWN_VAR%\icon.ico"),
+        );
+
+        assert_eq!(
+            resolved,
+            PathBuf::from(r"C:\Links\%DESKCRATE_UNKNOWN_VAR%\icon.ico")
+        );
+    }
 }

@@ -43,6 +43,7 @@ windows = { version = "0.58", features = [
     "Win32_Graphics_Gdi",
     "Win32_System_ProcessStatus",
     "Win32_System_Com",
+    "Win32_System_Environment",
     # 抓取网址图标用的 HTTP 客户端。用系统自带的 WinHTTP 而不是引入
     # reqwest：TLS 走 schannel、代理走系统配置，都不用额外依赖。
     "Win32_Networking_WinHttp",
