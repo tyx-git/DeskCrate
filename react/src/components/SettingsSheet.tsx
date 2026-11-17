@@ -91,7 +91,7 @@ export function SettingsSheet() {
           <div className="set-row">
             <span className="set-text">
               <span className="set-name">DeskCrate</span>
-              <span className="set-desc mono">v0.1.0 · 青瓷</span>
+              <span className="set-desc mono">v0.2.0 · 青瓷</span>
             </span>
             <span className="about-dot">
               <i className="status-dot" />

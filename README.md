@@ -4,7 +4,7 @@
   <p>把应用、快捷方式、文件夹、文件和网址收进一条始终在手边的悬浮侧栏。</p>
   <p>
     <a href="https://github.com/tyx-git/DeskCrate"><img alt="GitHub repository" src="https://img.shields.io/badge/GitHub-tyx--git%2FDeskCrate-181717?style=flat-square&logo=github"></a>
-    <img alt="Version 0.1.0" src="https://img.shields.io/badge/version-0.1.0-2563eb?style=flat-square">
+    <img alt="Version 0.2.0" src="https://img.shields.io/badge/version-0.2.0-2563eb?style=flat-square">
     <img alt="Platform Windows" src="https://img.shields.io/badge/platform-Windows-0078d4?style=flat-square&logo=windows">
     <img alt="Rust and Tauri" src="https://img.shields.io/badge/stack-Rust%20%7C%20Tauri%202%20%7C%20React-24c8db?style=flat-square">
   </p>
@@ -226,7 +226,7 @@ DeskCrate/
 ## 作者与版本
 
 - 作者：TTxyz
-- 当前版本：`v1.0.0`
+- 当前版本：`v0.2.0`
 - 仓库：<https://gitee/tian-someone/DeskCrate.git>
 
 ## 许可证

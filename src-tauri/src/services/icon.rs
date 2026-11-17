@@ -64,8 +64,24 @@ impl IconService {
     pub(crate) fn extract_from_path(
         &self,
         source_path: &Path,
+        arguments: Option<&str>,
         app_id: &str,
     ) -> AppResult<IconExtractionResult> {
+        // 系统应用（UWP/Store 应用）的图标不在 explorer.exe 的资源里，
+        // 必须用 `shell:AppsFolder\<AUMID>` 交给 Shell 解析。
+        // 这里只做严格的开头匹配：启动参数中间出现的 shell 字样不算，
+        // 大小写也必须完全一致。
+        if let Some(target) = arguments.filter(|value| value.starts_with("shell:AppsFolder\\")) {
+            match self.extractor.extract_file(Path::new(target), 0, app_id) {
+                Ok(result) => return Ok(result),
+                Err(error) => {
+                    // 图标失败不该阻止添加/编辑；继续走来源本身的图标，
+                    // 与旧数据以及无效 AUMID 的行为保持一致。
+                    log::debug!("系统应用图标解析失败，回退来源图标: {}", error.message);
+                }
+            }
+        }
+
         if path::is_shortcut(source_path) {
             let shortcut = self.parse_shortcut(source_path)?;
             return self.extract_from_shortcut(&shortcut, app_id);

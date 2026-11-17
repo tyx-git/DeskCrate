@@ -761,7 +761,7 @@ pub fn update_app(state: &AppState, request: UpdateAppRequest) -> AppResult<Upda
         validate_local_source(source_path)?;
     }
 
-    let (icon_service, old_source, old_icon_type) = {
+    let (icon_service, old_source, old_arguments, old_icon_type) = {
         let store = state.get_lock()?;
         let data = store.load_data()?;
         let app = tree::find_app(&data, &request.id)
@@ -769,12 +769,20 @@ pub fn update_app(state: &AppState, request: UpdateAppRequest) -> AppResult<Upda
         (
             IconService::from_store(&store),
             app.source_path.clone(),
+            app.arguments.clone(),
             app.icon_type.clone(),
         )
     };
 
     let source_changed = !same_source(&old_source, &source, &old_icon_type);
-    let prepared = if source_changed {
+    let old_shell = old_arguments
+        .as_deref()
+        .is_some_and(|value| value.starts_with("shell:AppsFolder\\"));
+    let new_shell = arguments
+        .as_deref()
+        .is_some_and(|value| value.starts_with("shell:AppsFolder\\"));
+    let shell_changed = (old_shell || new_shell) && old_arguments != arguments;
+    let prepared = if source_changed || shell_changed {
         Some(prepare_app(
             &source,
             Some(&name),
@@ -945,7 +953,8 @@ fn prepare_app(
         Source::LocalPath(source_path) if path::is_shortcut(source_path) => {
             let shortcut = icon_service.parse_shortcut(source_path)?;
             let name = choose_app_name(requested_name, &shortcut.name)?;
-            let icon_result = icon_service.extract_from_shortcut(&shortcut, app_id)?;
+            let icon_result =
+                icon_service.extract_from_path(source_path, arguments.as_deref(), app_id)?;
             let icon_url = IconService::asset_url(&icon_result.cache_path);
 
             Ok(PreparedApp {
@@ -960,7 +969,8 @@ fn prepare_app(
         Source::LocalPath(source_path) => {
             let fallback = default_app_name(source_path);
             let name = choose_app_name(requested_name, &fallback)?;
-            let icon_result = icon_service.extract_from_path(source_path, app_id)?;
+            let icon_result =
+                icon_service.extract_from_path(source_path, arguments.as_deref(), app_id)?;
             let icon_url = IconService::asset_url(&icon_result.cache_path);
 
             Ok(PreparedApp {

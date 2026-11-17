@@ -19,12 +19,15 @@ use windows::{
         Storage::FileSystem::{
             FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_NORMAL, FILE_FLAGS_AND_ATTRIBUTES,
         },
+        System::Com::{CoTaskMemFree, IBindCtx},
         UI::{
             Controls::{IImageList, ILD_NORMAL},
             Shell::{
-                ExtractIconExW, SHGetFileInfoW, SHGetImageList, SHGetStockIconInfo, SHFILEINFOW,
-                SHGFI_FLAGS, SHGFI_ICON, SHGFI_SYSICONINDEX, SHGFI_USEFILEATTRIBUTES, SHGSI_ICON,
-                SHGSI_LARGEICON, SHIL_JUMBO, SHSTOCKICONINFO, SIID_DOCNOASSOC, SIID_FOLDER,
+                Common::ITEMIDLIST, ExtractIconExW, SHGetFileInfoW, SHGetImageList,
+                SHGetStockIconInfo, SHParseDisplayName, SHFILEINFOW, SHGFI_FLAGS, SHGFI_ICON,
+                SHGFI_LARGEICON, SHGFI_PIDL, SHGFI_SYSICONINDEX, SHGFI_USEFILEATTRIBUTES,
+                SHGSI_ICON, SHGSI_LARGEICON, SHIL_JUMBO, SHSTOCKICONINFO, SIID_DOCNOASSOC,
+                SIID_FOLDER,
             },
             WindowsAndMessaging::{
                 DestroyIcon, DrawIconEx, PrivateExtractIconsW, DI_NORMAL, HICON,
@@ -36,7 +39,7 @@ use windows::{
 use crate::{
     error::AppResult,
     models::{AppError, IconExtractionResult},
-    system::{support, wide},
+    system::{shortcut::ComApartment, support, wide},
 };
 
 // 写入图标缓存的统一尺寸。
@@ -262,6 +265,82 @@ impl IconExtractor {
 fn extract_icon_from_file(source_path: &Path, icon_index: i32) -> AppResult<OwnedIcon> {
     let wide_path =
         wide::nul_terminated(source_path.as_os_str(), "icon_invalid_path", "图标来源路径")?;
+
+    // UWP/Store 应用的图标不在 explorer.exe 的资源表里。只有参数严格
+    // 以 `shell:AppsFolder\` 开头时才走 Shell PIDL；CLSID 转换失败会
+    // 回退到来源文件自身的图标，不能拖垮添加/编辑。
+    if source_path
+        .to_string_lossy()
+        .starts_with("shell:AppsFolder\\")
+    {
+        let _com = ComApartment::initialize()?;
+        let mut pidl: *mut ITEMIDLIST = ptr::null_mut();
+        unsafe {
+            SHParseDisplayName(
+                PCWSTR(wide_path.as_ptr()),
+                None::<&IBindCtx>,
+                &mut pidl,
+                0,
+                None,
+            )
+            .map_err(|error| support::windows_error("system_app_icon_failed", error))?;
+        }
+
+        if pidl.is_null() {
+            return Err(AppError::new(
+                "system_app_icon_failed",
+                format!("无法解析系统应用: {}", source_path.display()),
+            ));
+        }
+
+        // 先请求 Jumbo，能拿到 256×256 的 Store 应用图标；失败再退回
+        // 系统常规大图标。两条路径都复用现有 GDI 句柄包装。
+        let mut file_info = SHFILEINFOW::default();
+        let result = unsafe {
+            SHGetFileInfoW(
+                PCWSTR(pidl.cast()),
+                FILE_FLAGS_AND_ATTRIBUTES(0),
+                Some(&mut file_info as *mut SHFILEINFOW),
+                std::mem::size_of::<SHFILEINFOW>() as u32,
+                SHGFI_PIDL | SHGFI_SYSICONINDEX,
+            )
+        };
+
+        if result != 0 {
+            if let Ok(image_list) = unsafe { SHGetImageList::<IImageList>(SHIL_JUMBO as i32) } {
+                if let Ok(icon) = unsafe { image_list.GetIcon(file_info.iIcon, ILD_NORMAL.0) } {
+                    if !icon.is_invalid() {
+                        unsafe { CoTaskMemFree(Some(pidl.cast())) };
+                        return Ok(OwnedIcon { handle: icon });
+                    }
+                }
+            }
+        }
+
+        let mut file_info = SHFILEINFOW::default();
+        let result = unsafe {
+            SHGetFileInfoW(
+                PCWSTR(pidl.cast()),
+                FILE_FLAGS_AND_ATTRIBUTES(0),
+                Some(&mut file_info as *mut SHFILEINFOW),
+                std::mem::size_of::<SHFILEINFOW>() as u32,
+                SHGFI_PIDL | SHGFI_ICON | SHGFI_LARGEICON,
+            )
+        };
+
+        if result != 0 && !file_info.hIcon.is_invalid() {
+            unsafe { CoTaskMemFree(Some(pidl.cast())) };
+            return Ok(OwnedIcon {
+                handle: file_info.hIcon,
+            });
+        }
+
+        unsafe { CoTaskMemFree(Some(pidl.cast())) };
+        return Err(AppError::new(
+            "system_app_icon_failed",
+            format!("无法提取系统应用图标: {}", source_path.display()),
+        ));
+    }
 
     // `PrivateExtractIconsW` 可以按 256×256 请求资源中的最佳尺寸；
     // 它比 `ExtractIconExW` 更适合高 DPI 图标。路径过长或 API 不支持当前资源时，
@@ -721,4 +800,22 @@ fn validate_app_id(app_id: &str) -> AppResult<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_icon_from_file;
+    use std::path::Path;
+
+    // 只验证 shell 命名空间能拿到有效 HICON；不落盘、不依赖桌面 UI。
+    #[test]
+    fn extracts_system_app_icon_from_shell_namespace() {
+        let icon = extract_icon_from_file(
+            Path::new("shell:AppsFolder\\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"),
+            0,
+        )
+        .expect("系统应用图标应能通过 PIDL 提取");
+
+        assert!(!icon.handle.is_invalid());
+    }
 }
